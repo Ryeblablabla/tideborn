@@ -72,16 +72,40 @@ Its generated images, videos, fonts, and tools are not included. The game uses o
 
 Retain these notices when redistributing this game or its bundled effects.
 
-## Three-mesh-bvh and generic ink brush resources
+## Three-mesh-bvh
 
-three-mesh-bvh 0.9.18, copyright Garrett Johnson and contributors, MIT:
-https://github.com/gkjohnson/three-mesh-bvh
-The complete MIT license is retained in `node_modules/three-mesh-bvh/LICENSE` and the bundled JavaScript.
+Source: https://github.com/gkjohnson/three-mesh-bvh
 
-David Revoy / Deevad Krita 2023-01 bundle, generic brush opacity masks, CC0-1.0:
+Version: 0.9.18.
+
+MIT License
+
+Copyright (c) 2018 Garrett Johnson
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## Generic ink brush resources
+
+David Revoy / Deevad Krita 2023-01 bundle, generic brush opacity masks and paper grain, CC0-1.0:
 https://www.davidrevoy.com/article953/krita-brushes-2023-01-bundle
 Source hashes and atlas processing are recorded in `src/ink/assets/shared-ink-resources.json`.
-These are generic brush masks and paper/flow noise, not character or environment albedo.
+The flow noise uses a project-generated vector field.
 
 ## Ma Shan Zheng and Zhi Mang Xing calligraphy
 

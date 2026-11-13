@@ -7,8 +7,9 @@ const result=await build({absWorkingDir:root,entryPoints:['src/main.js'],bundle:
 const js=result.outputFiles.find(f=>f.path.endsWith('.js')).text.replace(/<\/script/gi,'<\\/script');
 const css=result.outputFiles.find(f=>f.path.endsWith('.css')).text;
 const source=fs.readFileSync(path.join(root,'index.html'),'utf8');
-const notices=fs.readFileSync(path.join(root,'THIRD_PARTY_NOTICES.md'),'utf8').replace(/--/g,'—');
+const licenseFiles=['LICENSE','THIRD_PARTY_NOTICES.md'];
+const notices=licenseFiles.map(file=>fs.readFileSync(path.join(root,file),'utf8')).join('\n\n').replace(/--/g,'—');
 const html=source.replace('</head>',()=>`<style>${css}</style>\n<!--\n${notices}\n-->\n</head>`).replace('<script type="module" src="/src/main.js"></script>',()=>`<script>${js}</script>`);
 fs.writeFileSync(path.join(root,'潜鳞-离线版.html'),html);
-fs.writeFileSync(path.join(root,'dist','THIRD_PARTY_NOTICES.md'),fs.readFileSync(path.join(root,'THIRD_PARTY_NOTICES.md')));
+for(const file of licenseFiles) fs.copyFileSync(path.join(root,file),path.join(root,'dist',file));
 console.log(`Offline game: 潜鳞-离线版.html (${(Buffer.byteLength(html)/1024).toFixed(0)} KB)`);
