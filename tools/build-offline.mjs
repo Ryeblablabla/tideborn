@@ -1,0 +1,14 @@
+import {build} from 'esbuild';
+import fs from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const result=await build({absWorkingDir:root,entryPoints:['src/main.js'],bundle:true,format:'iife',target:'es2022',minify:true,write:false,outfile:'game.js',legalComments:'inline',loader:{'.glb':'dataurl','.png':'dataurl','.woff':'dataurl'}});
+const js=result.outputFiles.find(f=>f.path.endsWith('.js')).text.replace(/<\/script/gi,'<\\/script');
+const css=result.outputFiles.find(f=>f.path.endsWith('.css')).text;
+const source=fs.readFileSync(path.join(root,'index.html'),'utf8');
+const notices=fs.readFileSync(path.join(root,'THIRD_PARTY_NOTICES.md'),'utf8').replace(/--/g,'—');
+const html=source.replace('</head>',()=>`<style>${css}</style>\n<!--\n${notices}\n-->\n</head>`).replace('<script type="module" src="/src/main.js"></script>',()=>`<script>${js}</script>`);
+fs.writeFileSync(path.join(root,'潜鳞-离线版.html'),html);
+fs.writeFileSync(path.join(root,'dist','THIRD_PARTY_NOTICES.md'),fs.readFileSync(path.join(root,'THIRD_PARTY_NOTICES.md')));
+console.log(`Offline game: 潜鳞-离线版.html (${(Buffer.byteLength(html)/1024).toFixed(0)} KB)`);

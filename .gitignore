@@ -1,0 +1,6 @@
+node_modules/
+dist/
+潜鳞-离线版.html
+.DS_Store
+.env
+.env.*
