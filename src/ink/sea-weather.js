@@ -1,18 +1,20 @@
 import { MathUtils } from 'three';
 
-// The same travelling front is sampled at sea level and by rays into the
-// low cloud bank. Its world coordinates do not follow the camera or dragon.
+// The sea surface and low clouds use the same world-space storm bands.
 export const seaWind = Object.freeze({
   x:.500, z:-.866, acrossX:.866, acrossZ:.500,
   speed:2.65, origin:54, spacing:158,
 });
 const {x,z,acrossX,acrossZ,speed,origin,spacing}=seaWind;
+const acrossStart=-70,acrossWidth=192;
+const acrossPeriod=acrossWidth*2;
 
 export const weatherGLSL = /* glsl */ `
   const vec2 seaWindAxis=vec2(${x.toFixed(3)},${z.toFixed(3)});
   const vec2 seaWindAcross=vec2(${acrossX.toFixed(3)},${acrossZ.toFixed(3)});
   vec3 seaFront(vec2 p,float time) {
-    float across=dot(p,seaWindAcross);
+    float lane=mod(dot(p,seaWindAcross)-(${acrossStart.toFixed(1)}),${acrossPeriod.toFixed(1)});
+    float across=${acrossStart.toFixed(1)}+min(lane,${acrossPeriod.toFixed(1)}-lane);
     float bend=12.4*sin(across*.027+.46)+4.2*sin(across*.067-.48);
     float d=dot(p,seaWindAxis)-time*${speed}+${origin.toFixed(1)}+bend;
     d=mod(d+${(spacing/2).toFixed(1)},${spacing.toFixed(1)})-${(spacing/2).toFixed(1)};
@@ -38,10 +40,12 @@ export const weatherGLSL = /* glsl */ `
 `;
 
 export function sampleSeaFront(px,pz,time,out) {
-  const side=px*acrossX+pz*acrossZ;
+  const crosswind=px*acrossX+pz*acrossZ-acrossStart;
+  const lane=crosswind-Math.floor(crosswind/acrossPeriod)*acrossPeriod;
+  const side=acrossStart+Math.min(lane,acrossPeriod-lane);
   const a=side*.027+.46,b=side*.067-.48;
   const bend=12.4*Math.sin(a)+4.2*Math.sin(b);
-  const turn=12.4*.027*Math.cos(a)+4.2*.067*Math.cos(b);
+  const turn=(12.4*.027*Math.cos(a)+4.2*.067*Math.cos(b))*(lane<acrossWidth?1:-1);
   const travel=px*x+pz*z-time*speed+origin+bend;
   const d=travel-Math.floor((travel+spacing/2)/spacing)*spacing;
   const span=1-MathUtils.smoothstep(Math.abs(side-39+8*Math.sin(d*.029)),13,65);

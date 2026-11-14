@@ -215,3 +215,34 @@ INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
 DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
+
+## Tideborn music, ambience and Foley
+
+The five chapter arrangements and the encounter percussion loop are original compositions for Tideborn. The recordings below were cut, retuned, arranged or mixed into the supplied assets.
+
+### Music samples — CC0 1.0
+
+- Pufermufin, guzheng, https://freesound.org/people/Pufermufin/sounds/396868/
+- Hypnotriod, dizi, https://freesound.org/people/Hypnotriod/sounds/384938/ and https://freesound.org/people/Hypnotriod/sounds/384941/
+- Versilian Studios and VCSL contributors, concert harp, bowed psaltery, Baroque tenor recorder, Nepalese hand bells, gong, frame drum and woodblock, https://github.com/sgossner/VCSL/tree/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e
+
+### Ambience
+
+- Reed shallows, CC0 1.0. Garuda1982, “strong wind on field with rustling reeds,” https://freesound.org/s/613960/ and SoundsLikeYukon, “Water lapping at shore on McClintock Bay,” https://freesound.org/s/758708/
+- Lake, CC0 1.0. kvgarlic, “LakeWavesOct25th2015.WAV,” https://freesound.org/s/326097/
+- Sea, CC BY 3.0. Luftrum, “Oceanwavescrushing,” https://commons.wikimedia.org/wiki/File:Oceanwavescrushing.ogg . Cropped, equalized, compressed, stereo adjusted and crossfaded into a repeating ambience for Tideborn. License https://creativecommons.org/licenses/by/3.0/
+- Mountains, CC0 1.0. Partiels, “Partiels_Wind_Mountain_Drome.wav,” https://freesound.org/s/688899/ and lakewoodsound, “High Winds Through Bare Trees,” https://freesound.org/s/719095/
+- Heaven, CC0 1.0. ValentinPetiteau, “Ambience - dawn atmosphere - air - light wind - south France - provence - far village - no insects.wav,” https://freesound.org/s/647660/ , Anthousai, “wind chimes - single 03.wav,” https://freesound.org/s/398492/ , and lakewoodsound, “High Winds Through Bare Trees,” https://freesound.org/s/719095/
+
+### Foley — CC0 1.0
+
+- rubberduck, water, bubbles and slime, https://opengameart.org/content/40-cc0-water-splash-slime-sfx . Stone hits and debris, https://opengameart.org/content/75-cc0-breaking-falling-hit-sfx
+- Independent.nu, break and crunch recordings, uploaded by qubodup, https://opengameart.org/content/5-break-crunch-impacts
+- qubodup / Iwan Gabovitch, bamboo swish, https://opengameart.org/content/swish-bamboo-stick-weapon-swhoshes
+- Peludo, bucket splash, https://opengameart.org/content/water-splash-and-sand-footsteps and https://rnan.itch.io/
+- AntumDeluge, wing flap, https://opengameart.org/content/large-wings-flap , derived from a recording by dave.des, https://freesound.org/people/dave.des/sounds/127197/
+- cognito perceptu, thunder, https://freesound.org/people/cognito%20perceptu/sounds/536901/
+- tec_studio, temple bell, https://freesound.org/people/tec_studio/sounds/668647/
+- Julie Damsgaard / Spring Spring, bell, https://opengameart.org/content/pleasing-bell-sound-effect
+
+CC0 1.0 Universal https://creativecommons.org/publicdomain/zero/1.0/

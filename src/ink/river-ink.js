@@ -7,9 +7,10 @@ const step = (lastZ-firstZ)/(sampleCount-1);
 
 export const mountainRiverGLSL = /* glsl */ `
   uniform float uMountainCourseReady;
+  uniform float uMountainCourseStart;
   uniform vec2 uMountainCourse[${sampleCount}];
   vec2 mountainWater(vec2 p, float paperWash, float time) {
-    float s=clamp((p.y-(${firstZ.toFixed(1)}))/${step.toFixed(8)},0.,${(sampleCount-1).toFixed(1)});
+    float s=clamp((p.y-uMountainCourseStart)/${step.toFixed(8)},0.,${(sampleCount-1).toFixed(1)});
     int index=min(int(s),${sampleCount-2});
     vec2 bend=mix(uMountainCourse[index],uMountainCourse[index+1],s-float(index));
     float across=(p.x-bend.x)/max(1.,bend.y);
@@ -35,18 +36,25 @@ export const mountainRiverGLSL = /* glsl */ `
 export function mountainRiverUniforms() {
   return {
     uMountainCourseReady:{value:0},
+    uMountainCourseStart:{value:firstZ},
     uMountainCourse:{value:Array.from({length:sampleCount},()=>new THREE.Vector2(0,1))},
   };
 }
 
 /** Use the same river course as the mountains, sampled in world coordinates. */
-export function applyMountainRiver(water, river) {
-  if (typeof river !== 'function' || water.userData.mountainCourse === river) return;
+export function applyMountainRiver(water, river, focusZ = 0, seed = null) {
+  const shift = seed === null ? 0 : Math.floor((focusZ + 48) / 96) * 14 * step;
+  const start = firstZ + shift;
+  if (typeof river !== 'function' || water.userData.mountainCourse === river &&
+      water.userData.mountainCourseStart === start && water.userData.mountainCourseSeed === seed) return;
   const uniforms=water.material.uniforms;
   uniforms.uMountainCourse.value.forEach((point,i)=>{
-    const section=river(firstZ+i*step);
+    const section=river(start+i*step);
     point.set(section.x,section.halfWidth);
   });
+  uniforms.uMountainCourseStart.value=start;
   uniforms.uMountainCourseReady.value=1;
   water.userData.mountainCourse=river;
+  water.userData.mountainCourseStart=start;
+  water.userData.mountainCourseSeed=seed;
 }

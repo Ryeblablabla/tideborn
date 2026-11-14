@@ -303,14 +303,17 @@ export class InkCombatMarks {
       this.dummy.rotateZ(entity.id * .63 + time * .46);
     } else {
       this.aimBrush(entity, .68);
+      const tier = Math.max(1, entity.tier ?? 1);
       if (kind === 'breach') {
         this.markUp.copy(this.viewNormal).addScaledVector(this.velocity, -this.viewNormal.dot(this.velocity)).normalize();
         this.markRight.crossVectors(this.markUp, this.velocity);
         this.dummy.quaternion.setFromRotationMatrix(this.matrix.makeBasis(this.markRight, this.markUp, this.velocity));
         this.dummy.rotateZ(-.19);
+        this.dummy.scale.set(1 + .20 * (tier - 1), 1 + .12 * (tier - 1), 1 + .28 * (tier - 1));
       } else {
         this.dummy.quaternion.setFromUnitVectors(FORWARD, this.velocity);
         this.dummy.rotateZ(entity.id * 1.25 + time * (kind === 'poison' ? 1.1 : 2.2));
+        if (kind === 'needle') this.dummy.scale.set(1, 1, 1 + .44 * (tier - 1));
       }
     }
     this.instance(this.projectiles[kind]);
@@ -381,17 +384,22 @@ export class InkCombatMarks {
     const { combat } = world;
     if (combat.pool.visible) {
       mute(combat.pool);
-      if(world.inkDragon.stage!==game.stage||!world.inkDragon.muzzle(this.head)){
+      if(world.inkDragon.stage!==game.form||!world.inkDragon.muzzle(this.head)){
         this.head.set(game.p.x,game.p.y+.55,game.p.z);
       }
       this.headRay.subVectors(this.head,camera.position);
       const headDepth=Math.max(.001,this.headRay.lengthSq());
-      const headWidth=[.76,.96,1.42,1.51][game.stage]??1.51;
+      const headWidth=[.76,.96,1.42,1.51,1.62][game.form];
+      const handoff=this.handoff;
       for (const particle of combat.particles) {
         const kind = particleColors.get(particle.color) ?? 'ink';
         let size = particle.size * Math.min(1, particle.life * 4);
         this.dummy.position.set(particle.x, particle.y, particle.z);
         if(kind!=='danger'){
+          if(handoff){
+            const span=Math.hypot(particle.x-handoff.x,(particle.y-handoff.y)*1.64,particle.z-handoff.z);
+            size*=1-.80*handoff.strength*(1-THREE.MathUtils.smoothstep(span,3.5,13.5));
+          }
           this.particleRay.subVectors(this.dummy.position,camera.position);
           const along=this.particleRay.dot(this.headRay)/headDepth;
           if(along>.08&&along<.995){

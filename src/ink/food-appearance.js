@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { FORM_BY_STAGE } from '../rules.js';
 import { createInkFoodGeometry, FAUNA_REGION, INK_FOOD, smoothFaunaSeams } from './fauna-geometry.js';
 import { supportInstancing } from './instanced-ink.js';
 
@@ -29,7 +30,7 @@ const closeInk = { fish: .73, [reedFryKind]: .70, 'sea-shoal': .79, 'sea-scallop
 
 function foodKind(item,stage) {
   if(item.shed)return 'shed';
-  if(item.battleLoot&&item.rank<2)return lootKind;
+  if(item.battleLoot&&item.rank<2&&stage>=2)return lootKind;
   return localKinds[stage]?.[item.rank]??FOOD_KINDS[item.rank];
 }
 
@@ -260,7 +261,7 @@ function writePose(transform, item, kind, time, size=1) {
 }
 
 export function noteFoodSwallow(world,event) {
-  if(event.stage>1 || !Number.isInteger(event.foodId))return;
+  if(event.stage>2 || !Number.isInteger(event.foodId))return;
   const swallows=states.get(world.foodModels)?.swallows;
   if(!swallows)return;
   if(swallows.length>=6)swallows.shift();
@@ -275,7 +276,7 @@ export function clearFoodSwallows(world) {
 function drawSwallows(world,state,stage,gameTime) {
   const duration=stage===0?.19:.28;
   state.swallows=state.swallows.filter(event=>event.stage===stage&&gameTime-event.swallowedAt<duration);
-  if(!state.swallows.length || world.inkDragon.stage!==stage)return;
+  if(!state.swallows.length || world.inkDragon.stage!==FORM_BY_STAGE[stage])return;
   const activeFood=world.inkDragon.motion.action;
   for(const event of state.swallows){
     if(activeFood?.kind==='eat'&&activeFood.target.foodId===event.foodId)continue;
@@ -301,7 +302,7 @@ function drawSwallows(world,state,stage,gameTime) {
 function drawPosedFeeding(world,state,stage) {
   const dragon=world.inkDragon;
   const {action,biteProgress,biteClosure,feedSide}=dragon.motion;
-  if(dragon.stage!==stage||action?.kind!=='eat'||biteClosure>=1)return;
+  if(dragon.stage!==FORM_BY_STAGE[stage]||action?.kind!=='eat'||biteClosure>=1)return;
   const {transform,mouth,lip,direction,tip,intakePose}=state;
   if(!dragon.muzzle(mouth,.057*biteClosure))return;
   const item=action.target;

@@ -1,2 +1,2 @@
 export * from './rules.js';
-export { Game } from './simulation.js';
+export { Game, DENSITY } from './simulation.js';

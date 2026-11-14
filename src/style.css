@@ -7,3 +7,51 @@
 @media(max-height:500px) and (min-width:650px){.topbar{top:17px}.title-content{top:23%;left:6%}.title-content h1{font-size:56px;margin:10px 0 6px}.title-en{font-size:9px;letter-spacing:7px}.chapter-label{font-size:8px}.title-description{font-size:11px;line-height:1.6;margin:15px 0}.primary,.secondary{padding:11px 16px;font-size:11px}.title-hint{font-size:8px;margin-top:10px}.evolution-strip{bottom:16px;padding-top:9px}.stage-step svg{width:30px;height:25px}.stage-step span{font-size:10px}.stage-step small{font-size:6px;margin-top:2px}.field-note{bottom:25%;width:175px}.field-note h3{font-size:16px}.field-note p{font-size:8px}.hud-bottom{bottom:35px}.growth-panel{bottom:30px;padding:10px 15px}.minimap{display:none}.map-label{display:none}.status-card{width:190px}.touch-stick{bottom:112px;width:76px;height:76px}.touch-knob{left:19px;top:19px}.modal h2{font-size:22px;margin:8px}.modal-sub{margin-bottom:16px}.upgrade-card{min-height:188px;padding:16px}.modal-foot{margin-top:15px}.result-icon{height:45px}.result-icon svg{height:45px}.result-stats{margin:16px 0}.result-stats strong{font-size:24px}.reward-line{margin-bottom:17px}.shop-card{padding:17px}.shop-card .card-symbol{width:33px;height:33px;font-size:24px;margin:0}.shop-card h3{font-size:14px;margin:10px 0}.shop-card p{font-size:9px;min-height:0}.shop-buy{margin-top:12px;padding:9px}.jade-count{margin:12px}.shop-level{font-size:9px}.card-symbol{margin-bottom:12px}.hud-top{top:12px}.boss-panel{top:80px}}
 
 @media(max-width:650px){.controls-hint{display:none}.dash-wrap{bottom:0}}
+
+.pause-settings {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.modal.audio-settings-modal {
+  width: min(360px, 90vw);
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+}
+.audio-master-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line, #c9d6b65c);
+  padding: 0 0 8px;
+  margin: 12px 0 4px;
+}
+.audio-mix-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 4ch;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  text-align: start;
+}
+.audio-mix-row input {
+  width: 100%;
+  height: 44px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--seal, var(--mint));
+}
+.audio-mix-row input:focus-visible {
+  outline: 2px solid var(--seal, #fff2a1);
+  outline-offset: 2px;
+}
+.audio-mix-row output {
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+.audio-settings-modal .text-button {
+  margin-top: 8px;
+  min-height: 44px;
+  min-width: 60px;
+}

@@ -393,24 +393,30 @@ export function buildReedMarsh(environment, root) {
   range(environment,root,{x:-9,z:88,width:52,depth:12,height:5.9,seed:31,amount:.19});
 }
 
-export function buildGreatLake(environment, root) {
+export function* buildGreatLake(environment, root) {
   shoreline(environment,root,[
     [-32,-25,14.0,15.1,2.8],[-30,-9,13.2,13.8,3.1],[-31,8,12.7,14.8,2.9],
     [-38,24,14.5,13.7,3.9],[-48,37,16.7,17.8,4.15],
   ],{name:'西面湖湾',tint:'#536761',amount:.40,shadow:false,seed:4.3});
+  yield;
   shoreline(environment,root,[
     [25,-19,11.8,10.7,4.4],[29,-8,13.8,13.2,3.8],[38,5,14.7,15.5,3.5],
     [44,22,15.7,17.5,3.1],[49,40,13.5,16.1,2.5],
   ],{name:'东面松岬',tint:'#4b5c56',amount:.32,shadow:true,seed:3.2,
     dabs:[[17.6,-11.5,3.5,5.8,.56,1],[20.5,-5.3,2.8,5.1,.39,.91],[22.7,1.3,3.2,4.2,.57,.61]]});
+  yield;
   lakeStoneCape(environment,root);
+  yield;
   shoreline(environment,root,[
     [-14.7,19,4.1,5.15,1.35],[-16.8,23,5.6,4.0,1.7],[-18.7,26.4,6.2,3.3,1.08],
   ],{name:'湖亭小洲',tint:'#71694f',amount:.39,shadow:false,seed:4.4,
     dabs:[[-13.6,18.9,1.55,2.8,-.52,.66],[-16.7,24.5,1.50,2.1,-.58,.46]]});
+  yield;
   const pavilionX = -16.2, pavilionZ = 21.8;
   environment.pavilion(root,pavilionX,Math.max(.38,environment.heightAt(pavilionX,pavilionZ)-.12),pavilionZ,1.62);
+  yield;
   environment.bridge(root,-23.7,19.5,-.37);
+  yield;
   // The pines hold one headland. The west terrace and pavilion have lighter,
   // upright or pendant silhouettes, with open gaps between stands.
   const headlandPines = [
@@ -419,8 +425,10 @@ export function buildGreatLake(environment, root) {
   ];
   for(const [i,[x,z,size,form,facing]] of headlandPines.entries()){
     plantPine(environment,root,x,z,size,560+i*11,'松岬团墨',form,facing);
+    yield;
   }
   addLakeSkiff(environment,root);
+  yield;
   const lakeTrees = [
     [-17.85,23.45,1.25,'tree',.72],[-19.60,25.4,1.42,'willow',2.50],
     [-26.6,-12.5,1.26,'tree',.12],[-22.8,-2,1.82,'willow',1.84],
@@ -430,11 +438,16 @@ export function buildGreatLake(environment, root) {
   for(const [i,[x,z,size,form,facing]] of lakeTrees.entries()){
     const y=environment.heightAt(x,z);
     if(y>.1)addLakeTree(environment,root,{x,y:y-.11*size,z,size,facing},form,760+i*17);
+    yield;
   }
   lakeHeadland(environment,root,{x:-48,z:64,width:33,depth:11,height:3.7,lean:-1,seed:41,tint:'#526c72',near:true});
+  yield;
   lakeHeadland(environment,root,{x:44,z:73,width:39,depth:14,height:4.8,lean:1,seed:44,tint:'#627879',near:true});
+  yield;
   lakeHeadland(environment,root,{x:-47,z:92,width:45,depth:15,height:6.7,lean:1,seed:42,tint:'#748487'});
+  yield;
   lakeHeadland(environment,root,{x:37,z:105,width:46,depth:15,height:5.0,lean:-1,seed:46,tint:'#758b8a'});
+  yield;
   const shoal = Array.from({length:30},(_,i)=>[-11.3+Math.sin(i*.21)*.65,16+i*.37]);
   drawShoreMarks(environment,root,shoal,660);
 }
@@ -464,7 +477,7 @@ export function buildOffshoreReefs(environment, root) {
       return height*face-.25;
     }
     const {mesh}=environment.terrain(root,x,-.11,z,[width,height,depth],{
-      field,seed,angle,distant:true,columns:56,rows:34,tint:'#425560',amount:.43,
+      field,seed,angle,distant:true,collision:true,columns:56,rows:34,tint:'#425560',amount:.43,
       paint(u,v,h){
         const face=h/height;
         const fracture=u*.72+v*.21-face*.51;
@@ -691,20 +704,24 @@ function seatValleyPines(environment, root, roots) {
   marks.renderOrder=1;
 }
 
-export function buildMountainValley(environment, root) {
+export function* buildMountainValley(environment, root) {
   addValleyShoulder(environment,root,riverEdge,1,{
     base:5.8,front:10.3,rear:3.4,dip:.88,seed:1.9,tint:'#3f8665',gain:1.14,
     ink:.85,paper:.55,tone:[.17,.40],
     plates:[[-17.0,8.4,8.3,9.8,.05,-2.1],[-4.2,7.0,7.6,8.8,-.13,1.8],[5.6,9.6,6.1,10.3,.23,4.1],[17.1,8.7,4.8,9.7,.12,-3.3]],
   });
+  yield;
   addValleyShoulder(environment,root,riverEdge,-1,{
     base:5.4,front:5.0,rear:1.8,dip:.58,seed:7.4,tint:'#356e9c',gain:1.09,
     ink:.76,paper:.48,tone:[.15,.37],
     plates:[[-18.2,7.7,7.0,12.2,.06,2.3],[-7.1,9.5,7.2,9.2,-.02,-3.7],[4.3,6.8,5.8,8.2,.12,1.4],[17.6,10.7,4.5,11.3,.27,-2.5]],
   });
+  yield;
   range(environment,root,{x:-36,z:44,width:15.7,depth:13.8,height:10.2,tint:'#50715e',amount:.65,seed:12,near:true,shoulder:'jade'});
+  yield;
   range(environment,root,{x:46,z:44,width:15.1,depth:11.3,height:12.6,tint:'#43657e',amount:.68,seed:23,near:true,shoulder:'slate'});
 
+  yield;
   const islands=[
     [-6.2,21.6,4.7,3.2,2.5,8,'island'],[-12.5,30.8,7.3,4.3,3.9,11,'island'],
     [21.0,33.0,6.0,2.6,1.64,21,'bank','bench'],[18.6,42.6,6.6,4.0,4.5,17,'island','cliff'],
@@ -714,12 +731,16 @@ export function buildMountainValley(environment, root) {
   for (const [x,z,width,depth,height,seed,shape,terrace] of islands) {
     const tint=terrace?(terrace==='bench'?'#7f8060':'#537964'):shape==='bank'?'#a48659':seed%2?'#5c8b6c':'#3e77a0';
     range(environment,root,{x,z,width,depth,height,seed,tint,amount:shape==='bank'?.59:.76,near:true,shape,terrace});
+    yield;
   }
   addSplitValleyShoal(environment,root,-7.6,51.9,8.2,3.6);
+  yield;
   addValleyShrine(environment,root);
+  yield;
   // One crossing spans the narrow side channel, while the main bend remains open.
   addValleyCrossing(environment,root,-9.6,25.8,1.15,8.0,.85);
 
+  yield;
   const ranges=[
     {name:'江口劈崖',x:-39,z:84,width:22,depth:13,height:23.2,tint:'#3c6878',angle:-.19,near:true,brush:'cliff',
       folds:[[-.31,.31,-.31,1.0,-.16],[.21,.39,.29,.61,.05]]},
@@ -736,7 +757,10 @@ export function buildMountainValley(environment, root) {
     {name:'回身青屏',x:67,z:-21,width:28,depth:28,height:16.0,tint:'#6c886d',angle:-.26,near:true,
       folds:[[-.24,.44,.25,.56,.25],[.37,.48,-.13,.83,.04]]},
   ];
-  for(const ridge of ranges)addValleyMass(environment,root,ridge);
+  for(const ridge of ranges){
+    addValleyMass(environment,root,ridge);
+    yield;
+  }
 
   const trees=[
     [17,-9,1.31,'cliff',2.93],[19.9,-5,.97,'fork',.53],[18.2,1.5,1.04,'cliff',2.26],
@@ -752,7 +776,9 @@ export function buildMountainValley(environment, root) {
     if(plantPine(environment,root,x,z,size,seed,treeNames[form],form,facing)){
       planted.push({x,z,size,facing});
     }
+    yield;
   }
   seatValleyPines(environment,root,planted);
+  yield;
   addRiverInk(environment,root);
 }

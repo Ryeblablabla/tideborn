@@ -104,8 +104,8 @@ const gait = [
  { wavelength: 4.35, sweep: .44, rise: .035, twist: .035, waveStart: .36, waveFull: 2.85 },
  { wavelength: 7.9, sweep: .73, rise: .05, twist: .045, waveStart: .90, waveFull: 3.85 },
  { wavelength: 6.7, sweep: .40, rise: .15, twist: .086 },
- { wavelength: 9.2, sweep: .46, rise: .63, twist: .14 },
- { wavelength: 9.7, sweep: .36, rise: .45, twist: .10 },
+ { wavelength: 9.2, sweep: .16, twist: .07 },
+ { wavelength: 9.7, sweep: .36, twist: .10 },
 ];
 const flinchPitch = [.342,-.09,.035,.145,0];
 const flinchHeight = [0,-.29,-.32,-.25,0];
@@ -118,6 +118,24 @@ const castNeck = [
  { gather: .66, dip: .38, near: .94, far: 2.78 },
  { gather: .40, dip: .58, near: 1.18, far: 3.66 },
 ];
+
+function flightUndulation(motion, stage, station, drive, weight) {
+ const { length, wingPhase, wingPower, settle, arrivalStroke } = motion;
+ const longBody = smooth(9, 32, length);
+ const wavelength = THREE.MathUtils.lerp(11.8, 20.6, longBody);
+ const amplitude = (.70 + .88 * longBody) * (.80 + .22 * wingPower + .18 * drive);
+ const span = smooth(1.6, 6.5, station) * (1 - .20 * smooth(.88, 1, station / length));
+ const arrival = (1 - .72 * smooth(.40, 1, settle)) * (1 - arrivalStroke.hold);
+ // The chest stays near the travelled path. A longer, slower wave travels
+ // down the body independently of its lateral bend.
+ if(stage===3){
+  const level=1-.55*smooth(.3,3.2,Math.abs(motion.lift));
+  const effort=1-.72*smooth(.08,.8,Math.max(motion.strike,motion.grip,motion.recoil));
+  return Math.sin(TAU*(station/wavelength-motion.flightPhase*.66))*.62*amplitude*span*level*effort*weight;
+ }
+ const recoveryHeave = clamp(motion.chapterWing?.recoveryHeave ?? 1, 0, 1);
+ return Math.sin(TAU * (station / wavelength - wingPhase * .66)) * amplitude * span * arrival * weight * recoveryHeave;
+}
 
 function roundTurns(points, spacing, turns) {
  const rounded=new THREE.Vector3();
@@ -176,14 +194,17 @@ export class DisplaySpine extends THREE.Curve {
   const { anticipate, strike, recoil, drive, phase }=motion;
   const look=stage<4?motion.aimYaw*.20:0;
   const scan=Math.sin(phase*.52+stage*.65)*(.038-.023*drive)*(1-anticipate)*(1-strike);
-  const headYaw=heading+look+scan;
+  const crownTurn=stage===3?(motion.crownTurn??0):0;
+  const headYaw=heading+look+scan+.22*crownTurn+(motion.dragonArtYaw??0);
   const hover=motion.air*(1-drive)*(.06+.025*Math.sin(phase*.9));
   const swallow=.093*motion.swallow;
   const lift=stage<4?motion.aimPitch*.20:0;
   const loads=[.135,.20,.245,.31,.16];
   const dives=[.105,.18,.26,.32,.15];
   const pitch=clamp(motion.pitch+(motion.attackPitch??0)+lift+hover+anticipate*loads[stage]-strike*dives[stage]
-   -.035*motion.surge-swallow+recoil*.11+motion.flinch*flinchPitch[stage]-.055*motion.change,-.65,.65);
+   -.035*motion.surge-swallow+recoil*.11+motion.flinch*flinchPitch[stage]-.055*motion.change
+   -.018*(motion.glideRelax??0)+.30*(motion.crownLift??0)-.19*(motion.waveTuck??0)
+   + (stage===4?.29*(motion.chapterWing?.reach??0)+(motion.chapterWing?.chestPitch??0):0),-.65,.65);
   this.headSlope=-Math.tan(pitch);
   const castAge=motion.castAge??Infinity;
   const gather=smooth(-.24,-.085,castAge)*(1-smooth(-.035,.022,castAge));
@@ -200,6 +221,8 @@ export class DisplaySpine extends THREE.Curve {
   this.turns.length=0;
   const spacing=.65*(1+stage*.08);
   const tail=motion.tailAttack;
+  const gateBrace=stage===4?motion.gatePose?.brace??0:0;
+  const gateHead=usable[0].point;
   const tailReach=tail ? .44+.33*smooth(8,27,motion.length) : 0;
   for(let i=0;i<count;i++){
    const sample=usable[Math.min(i,usable.length-1)],point=sample.point;
@@ -250,6 +273,43 @@ export class DisplaySpine extends THREE.Curve {
      this.waveWeights[i]=smooth(-.82,.64,straightness);
 
     }
+   }
+  }
+  if(gateBrace>0){
+   // One longitudinal arc carries the landing bend down the body. Following
+   // the incoming time trail at the tail would let the approach turn double back.
+   const towardX=Math.sin(heading),towardZ=Math.cos(heading);
+   const pose=motion.gatePose;
+   for(let i=1;i<count;i++){
+    const s=this.stations[i]*scale;
+    const station=s/Math.max(1,motion.length);
+    const mix=gateBrace*(1-.20*smooth(.43,.98,station));
+    const tuck=smooth(2.2,8.2,s)*(1-.62*smooth(8.3,18,s));
+    const along=s*(.925-.115*pose.load*tuck)+.18*Math.sin(s*.50);
+    const chest=smooth(.34,1.65,s)*(1-smooth(3.35,6.4,s));
+    // The planted forelegs take the descending chest. The lower spine
+    // follows in a longer arc while the shoulders spring forward on release.
+    const lift=(2.09+1.35*pose.load)*smooth(.6,8.0,s)
+     +(.72*pose.contact-1.15*pose.load+.55*pose.push)*chest
+     -1.55*pose.push*smooth(3.0,13.4,s);
+    const bow=(1.42+pose.fallSide*1.38)*Math.sin(station*Math.PI*.82)*smooth(.4,9.1,s)
+     -.46*pose.push*smooth(3.6,12.7,s);
+    this.points[i].lerp(this.offset.set(gateHead.x-towardX*along+towardZ*bow,
+     gateHead.y+lift,gateHead.z-towardZ*along-towardX*bow),mix);
+    this.bendOffsets[i].multiplyScalar(1-mix*.87);
+    this.waveWeights[i]=THREE.MathUtils.lerp(this.waveWeights[i],.8,mix);
+   }
+  }
+  const rain=stage===4?motion.gatePose?.rainBend??0:0;
+  if(rain>0){
+   // The shoulder leads while the long waist rounds the bank. Keep the
+   // displayed centerline on the travelled trail at the head and tail.
+   const bank=Math.tanh(motion.turn*2.4);
+   for(let i=1;i<count;i++){
+    const s=this.stations[i]*scale;
+    const waist=smooth(1.7,6.8,s)*(1-smooth(.57,1,i/(count-1)));
+    this.points[i].y+=1.25*rain*waist;
+    this.points[i].addScaledVector(this.waveSide.set(-this.heading.z,0,this.heading.x),rain*waist*(1.10+.60*bank));
    }
   }
   for(let i=0;i<count;i++){
@@ -366,15 +426,8 @@ export class DisplaySpine extends THREE.Curve {
    this.waveSide.normalize();
    target.addScaledVector(this.waveSide,Math.sin(wave)*envelope*sweep*strength/this.scale);
   }
-  let heaveWeight=1;
-  if(this.stage===3){
-   // The hips take part in the stroke, with a gentler rise through the
-   // longer waist. The same wave carries on into the tail.
-   const hip=this.hipStation*this.scale;
-   const waist=smooth(hip-5,hip-2,s)*(1-smooth(hip+3.2,hip+6.2,s));
-   heaveWeight-=.32*smooth(13,25,this.motion.length)*waist;
-  }
-  const heave=Math.cos(wave-.9)*rise*envelope*(.3+.7*drive+.35*beat.swim)*rest*heaveWeight;
+  const heave=this.stage>=3?flightUndulation(this.motion,this.stage,s,retainedDrive,weight)
+   :Math.cos(wave-.9)*rise*envelope*(.3+.7*drive+.35*beat.swim)*rest;
   const shoulder=smooth(0,1.1,s)*(1-smooth(2,4.4,s));
   const {rise:wingRise,recover}=this.motion.wingStroke;
   const wingLift=this.stage===4?THREE.MathUtils.lerp(this.motion.wingPower*(.66*wingRise-.18*recover),
@@ -390,6 +443,11 @@ export class DisplaySpine extends THREE.Curve {
   const freeNeck=1-this.castBend;
   const neckLift=((anticipate*.29-strike*.18)*freeNeck+recoil*.08)*nape*effort;
   const shoulders=((.57*chestLoad-.34*strike)*freeNeck+.20*grip)*collar*effort;
+  // Let the nape reach forward and the chest join the back in one broad arc.
+  const glide=this.motion.glideRelax??0;
+  const glideNeck=-.31*glide*smooth(0,.64,s)*(1-smooth(1.05,1.96,s));
+  const glideChest=.32*glide*smooth(.58,1.85,s)*(1-smooth(2.45,5.2,s));
+  const formArch=(this.motion.chapterWing?.chestArch??0)*smooth(.1,1.17,s)*(1-smooth(2.2,5.0,s));
   // Give the surface lunge's centreline the same slope as its head frame.
   // The small snake hands the motion back to the trunk over a shorter neck.
   const neckCast=castNeck[this.stage];
@@ -444,8 +502,28 @@ export class DisplaySpine extends THREE.Curve {
     target.addScaledVector(this.waveSide,.57*reaction*clearance/this.scale);
    }
   }
-  target.y+=(heave*(this.stage<2?1:.35+.65*air)+breath+neckLift+shoulders+castHeight+flinchHeight[this.stage]*brace+
-   beat.lift*clearance+sip-.28*reaction)/this.scale;
+  target.y+=(heave*(this.stage<2?1:.35+.65*air)+breath+neckLift+shoulders+glideChest+formArch+castHeight+flinchHeight[this.stage]*brace+
+   beat.lift*clearance+glideNeck+sip-.28*reaction)/this.scale;
+  const gate=this.motion.gatePose;
+  if(this.stage===4&&gate?.lockShockTime!=null){
+   // The jolt moves from the collar down the existing centerline. The
+   // endpoint can lag without moving hitboxes or replacing the trail.
+   const alongSpine=s/Math.max(this.motion.length,1);
+   const localTime=gate.lockShockTime-.38*alongSpine;
+   const jolt=smooth(.012,.16,localTime)*(1-smooth(.19,.45,localTime));
+   const load=jolt*smooth(.44,2.3,s)*(.61+.39*alongSpine);
+   target.y-=1.46*load/this.scale;
+   target.addScaledVector(this.waveSide,.61*load/this.scale);
+  }
+  if(this.stage===4&&gate&&(gate.front>0||gate.rear>0)){
+   // Weight travels through the shoulders and then the hips. Carry the
+   // hindquarters out of the falling arc while the outer tail still follows it.
+   const shoulderLoad=smooth(.2,1.85,s)*(1-smooth(2.65,5.4,s));
+   const hip=this.hipStation*this.scale;
+   const hipLoad=smooth(3.0,Math.max(5,hip-.4),s)*(1-smooth(hip+.5,Math.max(hip+4,10),s));
+   target.y-=((.38*gate.front+.63*gate.load)*shoulderLoad+1.65*gate.rear*hipLoad)/this.scale;
+   target.addScaledVector(this.heading,1.65*gate.rear*hipLoad/this.scale);
+  }
   target.y+=feedHeight;
   return target;
  }
@@ -469,7 +547,8 @@ export class DisplaySpine extends THREE.Curve {
   const beat=spineBeat(this.motion,this.stage,s,this.collar,this.hipStation*this.scale,this.motion.length,this.bodyPose);
   const brace = .26 * flinch * flinchSide * smooth(.25,1.7,s) * (1-smooth(2.4,6.1,s));
   const hook = -.24*this.hookLean*smooth(.2,1.38,s)*(1-smooth(2.45,5.1,s));
-  return bank*Math.exp(-s*(.16+.14*(1-air)))+local+beat.roll+brace+hook;
+  const entryBank=(this.motion.valleyBank??0)*Math.exp(-s*.07);
+  return bank*Math.exp(-s*(.16+.14*(1-air)))+local+beat.roll+brace+hook+entryBank;
  }
 }
 
@@ -550,6 +629,18 @@ export class CurveField {
    if(previousT)previousT.copy(t);else previousT=t.clone();
   }
   this.pathPoints=points;this.curveTexture.needsUpdate=true;this.shared.uGrowthLength.value=length;
+ }
+
+ settleChest(delta){
+  const length=this.shared.uGrowthLength.value;
+  const last=Math.ceil(.71/length*(this.curveCount-1));
+  for(let i=0;i<=last&&i<this.curveCount;i++){
+   const distance=i*length/(this.curveCount-1);
+   const shift=delta*(1-smooth(.38,.71,distance));
+   this.pathPoints[i].y+=shift;
+   this.curveArray[i*4+1]+=shift;
+  }
+  this.curveTexture.needsUpdate=true;
  }
 
  sampleFrame(distance){

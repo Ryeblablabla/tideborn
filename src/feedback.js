@@ -1,3 +1,5 @@
+import { drawDrillStrike } from './drill-telegraph.js';
+
 const statusMarks = [
   ['wet','#4e6e78','湿'], ['poison','#63774c','毒'], ['burn','#9a523d','炎'], ['charge','#6b6279','雷'],
 ];
@@ -37,11 +39,22 @@ export class FeedbackLayer {
 
   async prepare() {
     if (this.world.isInk) {
-      void document.fonts.load(`400 16px ${inkLabelFont}`, '湿毒炎雷云').catch(() => {});
+      void document.fonts.load(`400 16px ${inkLabelFont}`, '湿毒炎雷云灵性龙躯节').catch(() => {});
     }
   }
   add() {}
-  clear() { this.numbers=[]; }
+  clear() { this.numbers=[]; this.absorption=null; }
+
+  absorb({stage,essence,growth}) {
+    if(!essence&&growth<.05)return;
+    const current=this.absorption;
+    if(current?.stage===stage&&current.t<.42){
+      current.essence+=essence;
+      current.growth+=growth;
+      return;
+    }
+    this.absorption={stage,essence,growth,t:0};
+  }
 
   number(x,z,value,kind,y=.7) {
     const previous = this.numbers.find(n => n.kind===kind && n.t<.20 &&
@@ -63,6 +76,8 @@ export class FeedbackLayer {
     }
     ctx.clearRect(0,0,canvas.width,canvas.height);
     this.numbers=this.numbers.filter(number=>{number.t+=dt;return number.t<.65;});
+    const absorption=this.absorption;
+    if(absorption&&(absorption.stage!==game?.stage||(absorption.t+=dt)>.9))this.absorption=null;
     if (!game || game.status==='ascending' || game.status==='won') return;
     this.occupied=[];
     const place = (point, width, height, maxShift=2) => {
@@ -98,9 +113,32 @@ export class FeedbackLayer {
       this.occupied.push({...point,w:52,h:37});
       reserved++;
     }
+    const activeWonder=game.wonders?.active;
+    const wonderMarkers=[activeWonder?.beacon,...(activeWonder?.hazards??[]).filter(hazard=>
+      hazard.phase==='warning'&&game.time>=hazard.startsAt)];
+    for(const marker of wonderMarkers){
+      if(!marker)continue;
+      const point=world.project(marker.x,marker.z,marker.safeY??marker.y);
+      if(point.visible!==false)this.occupied.push({...point,w:70,h:54});
+    }
 
     ctx.textAlign='center';
     ctx.textBaseline='middle';
+    if(this.absorption&&activeWonder?.kind!=='carp'&&activeWonder?.kind!=='spring'){
+      const {essence,growth,t}=this.absorption;
+      const text=[essence>0&&`灵性 +${essence}`,growth>=.05&&`龙躯 +${growth.toFixed(1)} 节`].filter(Boolean).join('  ·  ');
+      const point=world.project(p.x,p.z,p.y+1);
+      point.y-=41+t*17;
+      ctx.font=`400 16px ${inkLabelFont}`;
+      const label=place(point,ctx.measureText(text).width+15,22);
+      if(label){
+        ctx.globalAlpha=Math.min(1,(.9-t)*3.6);
+        this.paperTag(label,'#496650');
+        ctx.fillStyle='#3d5d47';
+        ctx.fillText(text,label.x,label.y+.5);
+        ctx.globalAlpha=1;
+      }
+    }
     const boss=game.boss;
     const states=boss?statusMarks.filter(([key])=>boss[key]>0):[];
     if(states.length){
@@ -173,6 +211,7 @@ export class FeedbackLayer {
         ctx.globalAlpha=1;
       }
     }
+    drawDrillStrike(ctx,world,game);
   }
 
   paperTag({x,y,w,h},color) {

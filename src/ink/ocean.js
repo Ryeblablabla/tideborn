@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { SeaContact, contactWashGLSL } from './water-contact.js';
+import { SwimWake } from './swim-wake.js';
 import { combatWaterGLSL, combatWaterUniforms } from './water-combat.js';
 import { mountainRiverUniforms, mountainRiverGLSL } from './river-ink.js';
 import { seaWind, weatherGLSL, sampleSeaFront, sampleOffshore } from './sea-weather.js';
 
-const WAKE_POINTS = 12;
 const SHORE_BANKS = 10;
 const TINTS = ['#58645b', '#445e78', '#2b4653', '#57747a', '#79736b'];
 const TINT_STRENGTH = [.16, .64, .57, .33, .15];
@@ -151,13 +151,11 @@ const waterFragment = /* glsl */ `
   varying vec3 vWaterNormal;
   varying vec2 vRestWater;
   varying vec3 vCrestResponse;
-  uniform float uTime, uStage;
+  uniform float uTime, uStage, uFrontierWater;
   uniform vec3 uHead;
-  uniform vec3 uWake[${WAKE_POINTS}];
-  uniform float uWakeStrength[${WAKE_POINTS}];
-  uniform float uWakeLink[${WAKE_POINTS}];
   uniform vec4 uBanks[${SHORE_BANKS}];
   uniform vec4 uSurge;
+  uniform vec3 uDrillStorm;
   ${noise}
   ${waveShader}
   ${seaWash}
@@ -188,38 +186,6 @@ const waterFragment = /* glsl */ `
     float fray=1.-smoothstep(.028,.18,abs(line+.43+(grain-.5)*.23));
     float breakUp=smoothstep(.19,.67,inkNoise(vec2(along*7.+seed,seed*.48)));
     return belly*(pressure*.78+fray*.22)*breakUp;
-  }
-
-  vec2 wakeAt(vec2 p) {
-    if (distance(p,uHead.xz)>29. || uWake[0].y>900.) return vec2(0.);
-    float dist=1e5, side=1., progress=0., clearance=100., pathStrength=0.;
-    for(int i=0;i<${WAKE_POINTS-1};i++) {
-      vec3 a=uWake[i], b=uWake[i+1];
-      if(a.y>900. || b.y>900.) break;
-      if(uWakeLink[i]<.5) continue;
-      vec2 segment=b.xz-a.xz, rel=p-a.xz;
-      float lenSq=dot(segment,segment);
-      if(lenSq<.0001) continue;
-      float along=clamp(dot(rel,segment)/lenSq,0.,1.);
-      vec2 delta=rel-segment*along;
-      float d=dot(delta,delta);
-      if(d<dist){
-        dist=d;
-        side=segment.x*delta.y-segment.y*delta.x;
-        progress=(float(i)+along)/float(${WAKE_POINTS-1});
-        clearance=mix(a.y,b.y,along);
-        pathStrength=mix(uWakeStrength[i],uWakeStrength[i+1],along);
-      }
-    }
-    float d=sqrt(dist);
-    float strength=(1.-smoothstep(.69,1.,progress))*(1.-smoothstep(.86,1.95,clearance))*pathStrength;
-    float spread=.44+progress*1.25;
-    float streak=inkNoise(p*vec2(1.8,2.5)-uTime*.29);
-    float bank=(1.-smoothstep(.025,.11+progress*.055,abs(d-spread-(streak-.5)*.15)));
-    float sideStroke=(1.-smoothstep(.015,.07,abs(d-spread-.34+sign(side)*.07)));
-    float feather=exp(-abs(d-spread)*2.35)*.48;
-    return vec2((bank*.78+sideStroke*.30+feather)*strength, 
-      (1.-smoothstep(.08,.44,abs(d-spread-.14)))*strength*streak);
   }
 
   void main() {
@@ -256,6 +222,20 @@ const waterFragment = /* glsl */ `
           *smoothstep(.2,1.,r)*uSurge.w;
         ink=mix(ink, max(ink,.40+spiral*.21), effect);
         reserve=max(reserve, smoothstep(.35,.95,spiral)*effect*.91);
+      }
+      if(uDrillStorm.z>0.) {
+        vec2 radial=p-uDrillStorm.xy;
+        float edge=length(radial)-uDrillStorm.z;
+        float tooth=inkNoise(p*.77);
+        float band=smoothstep(.0,2.8,edge+(tooth-.5)*.36);
+        float fringe=1.-smoothstep(.23,.92,abs(edge-(broad-.5)*.43));
+        float second=1.-smoothstep(.15,1.30,abs(edge-2.1+(broad-.5)*1.1));
+        float fleck=.58+.42*smoothstep(.25,.78,tooth);
+        float backwash=1.-smoothstep(.15,.55,abs(sin(edge*1.65+uTime*2.+broad*3.)));
+        ink=mix(ink,max(ink,.68+.09*broad),band*.90);
+        ink=1.-(1.-ink)*(1.-second*.32);
+        ink=mix(ink,min(ink,.075),fringe*fleck*.87);
+        reserve=max(reserve,max(fringe*fleck*.83,band*backwash*fleck*.16));
       }
     } else {
       float lake=step(.5,uStage);
@@ -309,6 +289,22 @@ const waterFragment = /* glsl */ `
           float wash=inkNoise(p*vec2(.19,.52)+vec2(uTime*.019,7.9));
           ink=.015+.029*bankWash+shore*.54+nearBank*(wash*.086+fleck*.157);
         }
+        // The opening pools have hand-laid strokes. Away from them, the
+        // same broken brush families drift in world space between new banks.
+        if(uFrontierWater>.5){
+          vec2 outer=abs(p)/mix(vec2(45.,53.),vec2(67.,75.),lake);
+          float extra=smoothstep(.84,1.28,max(outer.x,outer.y));
+          float wash=washNoise(vec2(p.x*.029+7.2,p.y*.21-uTime*.028));
+          float span=inkNoise(vec2(p.x*.071,p.y*.095+2.9));
+          float run=p.y*.73+p.x*.075+2.2*span+.66*sin(p.x*.14+p.y*.058);
+          float drag=1.-smoothstep(.045,.14+fwidth(run)*.44,abs(sin(run)));
+          float torn=inkNoise(vec2(p.x*.20+7.0,p.y*.49+span));
+          float inkStroke=drag*smoothstep(.45,.71,wash)*smoothstep(.37,.64,torn);
+          float shallow=1.-smoothstep(.4,6.4,bankDistance);
+          float pressure=mix(.074,.129,lake)*smoothstep(.52,.80,wash);
+          ink+=extra*(pressure+inkStroke*mix(.097,.127,lake)+shallow*.044);
+          reserve=max(reserve,extra*inkStroke*smoothstep(.68,.87,wash)*lake*.22);
+        }
       }
       if(upland>.5) {
         float mistLayer=washNoise(vec2(p.x*.031,p.y*.125-uTime*.04));
@@ -322,9 +318,6 @@ const waterFragment = /* glsl */ `
       }
     }
     if(uStage<2.5) {
-      vec2 wake=wakeAt(p);
-      ink+=wake.x*(sea?.19:.18);
-      reserve=max(reserve,wake.y*(sea?.55:.11));
       if(sea) {
         vec3 hull=hullWashAt(p,paper);
         ink*=1.-hull.z*.48;
@@ -561,23 +554,24 @@ function moveShallowCombat({geometry,axis},centerX,centerZ,combat) {
   normal.needsUpdate=true;
 }
 
-function setWake(uniforms, frame, stage) {
-  const spine = frame.spine ?? [];
-  const length = Math.min(spine.length, WAKE_POINTS * 2 - 1);
-  const stride = Math.max(1, Math.ceil((length - 1) / (WAKE_POINTS - 1)));
-  const wake = uniforms.uWake.value;
-  for (let i = 0; i < wake.length; i++) {
-    const point = spine[i * stride];
-    if (stage < 3 && point && i * stride < length) {
-      wake[i].set(point.x, point.y, point.z);
-      uniforms.uWakeStrength.value[i]=1;
-      uniforms.uWakeLink.value[i]=1;
-    } else {
-      wake[i].set(0, 1000, 0);
-      uniforms.uWakeStrength.value[i]=0;
-      uniforms.uWakeLink.value[i]=0;
-    }
+function waterCell(axis,coordinate) {
+  let a=0,b=axis.length-1;
+  while(a+1<b){
+    const middle=(a+b)>>1;
+    if(axis[middle]<coordinate)a=middle;
+    else b=middle;
   }
+  return a;
+}
+
+function meshHeightAt(water,axis,x,z) {
+  const localX=x-water.position.x,localZ=z-water.position.z;
+  const column=waterCell(axis,localX),row=waterCell(axis,localZ),size=axis.length;
+  const index=row*size+column,vertices=water.geometry.attributes.position;
+  const u=THREE.MathUtils.clamp((localX-axis[column])/(axis[column+1]-axis[column]),0,1);
+  const v=THREE.MathUtils.clamp((localZ-axis[row])/(axis[row+1]-axis[row]),0,1);
+  const a=vertices.getZ(index),b=vertices.getZ(index+1),c=vertices.getZ(index+size),d=vertices.getZ(index+size+1);
+  return u+v<1?a+(b-a)*u+(c-a)*v:d+(c-d)*(1-u)+(b-d)*(1-v);
 }
 
 export function inkWater() {
@@ -586,15 +580,15 @@ export function inkWater() {
   const swells = makeSwellMesh(compact);
   let shallowCombat=null;
   const contact = new SeaContact();
+  const wake = new SwimWake();
   const uniforms = {
     uTime: { value: 0 },
     uStage: { value: 0 },
+    uFrontierWater: { value: 0 },
     uHead: { value: new THREE.Vector3() },
-    uWake: { value: Array.from({length: WAKE_POINTS}, () => new THREE.Vector3(0, 1000, 0)) },
-    uWakeStrength: { value: new Float32Array(WAKE_POINTS) },
-    uWakeLink: { value: new Float32Array(WAKE_POINTS) },
     uBanks: { value: Array.from({length: SHORE_BANKS}, () => new THREE.Vector4()) },
     uSurge: { value: new THREE.Vector4() },
+    uDrillStorm: { value: new THREE.Vector3() },
     uEntry: { value: new THREE.Vector4() },
     ...contact.uniforms,
     ...combatWaterUniforms(),
@@ -605,19 +599,23 @@ export function inkWater() {
   }));
   water.name = '水面';
   water.frustumCulled = false;
-  water.add(contact.mesh);
+  water.add(contact.mesh,wake.mesh);
   const contactWave={};
   const sampleSurface=(x,z,time,head)=>{
     const distance=Math.hypot(x-head.x,z-head.z);
     const amplitude=.20+.61*THREE.MathUtils.smoothstep(distance,6,27);
     return water.position.y+amplitude*sampleNearWave(x,z,time,contactWave).swell;
   };
-  water.userData.inspectContact=()=>contact.inspect();
+  water.userData.sampleSurface=sampleSurface;
+  water.userData.inspectContact=()=>({...contact.inspect(),wake:wake.inspect().samples});
+  water.userData.inspectWake=()=>wake.inspect();
   water.userData.latestContact=()=>contact.events.at(-1);
   water.userData.crestContact=contact;
-  water.userData.seaPose=(time,frame,game)=>frame.stage===2&&frame.position===game?.p?
+  water.userData.seaPose=(time,frame,game)=>frame.chapter===2&&frame.position===game?.p?
     contact.poseAt(time,frame,sampleSurface):null;
   let lastStage = -1, lastSwellTime = -1;
+  let wakeAxis=null;
+  const surfaceAt=(x,z)=>water.position.y+(wakeAxis?meshHeightAt(water,wakeAxis,x,z):0);
   water.userData.updateSurface = (time, stage, frame, game, banks = game?.obstacles, paintedSpine) => {
     const head = frame.position;
     if (!head) return;
@@ -631,10 +629,11 @@ export function inkWater() {
     }
     uniforms.uTime.value = time;
     uniforms.uStage.value = stage;
+    uniforms.uFrontierWater.value=Number(Boolean(game?.exploring));
     uniforms.uHead.value.set(head.x, head.y, head.z);
+    const storm=stage===2?game?.drill?.storm:null;
+    uniforms.uDrillStorm.value.set(storm?.x??0,storm?.z??0,storm?.radius??0);
     contact.update(time,stage,frame,game,paintedSpine,sampleSurface);
-    if (stage===2) contact.writeWake(uniforms.uWake.value,uniforms.uWakeStrength.value,uniforms.uWakeLink.value,time);
-    else setWake(uniforms,frame,stage);
     if (stage < 2) {
       for (let i = 0; i < SHORE_BANKS; i++) {
         const bank = banks?.[i];
@@ -672,6 +671,10 @@ export function inkWater() {
         water.position.setX(0).setZ(0);
       }
     }
+    if(stage!==2&&water.geometry===flat)water.position.setX(head.x).setZ(head.z);
+    wakeAxis=stage===2?swells.axis:water.geometry===shallowCombat?.geometry?shallowCombat.axis:null;
+    wake.update(time,stage,head,game,surfaceAt(head.x,head.z));
+    wake.paint(time,surfaceAt,water.position);
     contact.render(time,water.position);
   };
   return water;
@@ -854,6 +857,27 @@ function makeBreakerAnchors() {
   });
 }
 
+function updateBreakerNormals(index, positions, normal, count, indexCount) {
+  const values=normal.array;
+  values.fill(0,0,count*3);
+  // Use the same indexed face normals and area weights as Three's generic
+  // routine. Only the active slots can contribute to the rendered surface.
+  for(let i=0;i<indexCount;i+=3){
+    const a=index[i]*3,b=index[i+1]*3,c=index[i+2]*3;
+    const cx=positions[c]-positions[b],cy=positions[c+1]-positions[b+1],cz=positions[c+2]-positions[b+2];
+    const ax=positions[a]-positions[b],ay=positions[a+1]-positions[b+1],az=positions[a+2]-positions[b+2];
+    const nx=cy*az-cz*ay,ny=cz*ax-cx*az,nz=cx*ay-cy*ax;
+    values[a]+=nx;values[a+1]+=ny;values[a+2]+=nz;
+    values[b]+=nx;values[b+1]+=ny;values[b+2]+=nz;
+    values[c]+=nx;values[c+1]+=ny;values[c+2]+=nz;
+  }
+  for(let i=0;i<count*3;i+=3){
+    const x=values[i],y=values[i+1],z=values[i+2];
+    const scale=1/(Math.sqrt(x*x+y*y+z*z)||1);
+    values[i]=x*scale;values[i+1]=y*scale;values[i+2]=z*scale;
+  }
+}
+
 function makeBreakers(compact) {
   const capacity = compact ? 10 : 15;
   const sections = compact ? 22 : 28;
@@ -874,8 +898,8 @@ function makeBreakers(compact) {
   geometry.setAttribute('aBreaker', breaker);
   geometry.setAttribute('aCrown', crown);
   geometry.setAttribute('uv', uv);
-  geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(count * 3), 3)
-    .setUsage(THREE.DynamicDrawUsage));
+  const normal=new THREE.BufferAttribute(new Float32Array(count * 3),3).setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute('normal',normal);
   let indexOffset = 0;
   for (let slot = 0; slot < capacity; slot++) {
     for (let i = 0; i <= sections; i++) {
@@ -904,7 +928,19 @@ function makeBreakers(compact) {
     new THREE.CatmullRomCurve3(profile.map(([x,y])=>new THREE.Vector3(x,y,0))).getPoints(samples)));
   const peaksByForm=sectionsByForm.map(form=>form.map(points=>
     points.reduce((peak,point,i)=>point.y>points[peak].y?i:peak,0)/samples));
-  const anchors = makeBreakerAnchors();
+  const anchors = makeBreakerAnchors().map(wave=>{
+    const form=breakerForms[wave.form];
+    const offsets=Array.from({length:sections+1},(_,i)=>{
+      const along=i/sections*2-1;
+      const width=along*wave.width*.5;
+      return {
+        along,width,bend:curveOffset(along,wave.phase,form),
+        tapered:(1-along*along)**form.taper,
+        crownPhase:along*form.crownRate+wave.index*.6,
+      };
+    });
+    return {...wave,formProfile:form,offsets,hand:wave.index%2?1:-1,seed:wave.index*2.71};
+  });
   const frontSample={};
   const nearby = [];
   let lastTime = -1;
@@ -913,12 +949,13 @@ function makeBreakers(compact) {
     return along*along*form.curve+Math.sin(along*form.swayRate+phase*6.28)*form.sway;
   }
 
-  function clearance(dx,dz,rightX,rightZ) {
+  function clearance(dx,dz,rightX,rightZ,distance=Math.sqrt(dx*dx+dz*dz)) {
+    if(distance<=7.4)return 0;
     const across=Math.abs(dx*rightX+dz*rightZ);
     const along=Math.abs(-dx*rightZ+dz*rightX);
     const side=THREE.MathUtils.smoothstep(across,CHANNEL_EDGE,CHANNEL_BANK);
     const reach=THREE.MathUtils.smoothstep(along,CHANNEL_LENGTH,CHANNEL_END);
-    const close=THREE.MathUtils.smoothstep(Math.hypot(dx,dz),7.4,12.1);
+    const close=THREE.MathUtils.smoothstep(distance,7.4,12.1);
     return Math.max(side,reach)*close;
   }
 
@@ -942,7 +979,7 @@ function makeBreakers(compact) {
     for (let slot = 0; slot < active; slot++) {
       const wave = nearby[slot];
       const feelsCrest=hasCrest&&wave.distance<wave.width*.56+18;
-      const form=breakerForms[wave.form];
+      const form=wave.formProfile;
       const [risingFace,foldedLip,fallenWash]=sectionsByForm[wave.form];
       const [earlyPeak,foldPeak,latePeak]=peaksByForm[wave.form];
       const windLoad=.82+.26*sampleSeaFront(wave.x,wave.z,time,frontSample).pressure;
@@ -950,6 +987,8 @@ function makeBreakers(compact) {
       const age = travel - Math.floor(travel);
       const advance = (age - .44) * (11.5 + wave.width * .12);
       const far = 1 - THREE.MathUtils.smoothstep(wave.distance, 51, 82);
+      const hand=wave.hand;
+      const collapse=.115*Math.sin(Math.PI*age);
       let openFraction = 0;
       // Use the crest as a whole when it runs into the channel. The remaining
       // near side can still build a wall when most of its span lies outside it.
@@ -963,20 +1002,16 @@ function makeBreakers(compact) {
       }
       const lane = THREE.MathUtils.smoothstep(openFraction/5,.10,.74);
       for (let i = 0; i <= sections; i++) {
-        const along = i / sections * 2 - 1;
-        const width = along * wave.width * .5;
-        const bend = curveOffset(along, wave.phase, form);
-        const tapered = (1 - along * along) ** form.taper;
+        const {along,width,bend,tapered,crownPhase}=wave.offsets[i];
         // Start breaking on one end, so the collapse travels along the wall.
-        const hand = wave.index % 2 ? 1 : -1;
-        const localAge = THREE.MathUtils.clamp(age - hand * along * .115 * Math.sin(Math.PI * age), 0, 1);
+        const localAge = THREE.MathUtils.clamp(age - hand * along * collapse, 0, 1);
         const roll = THREE.MathUtils.smoothstep(localAge, .18, .46);
         const spill = THREE.MathUtils.smoothstep(localAge, .49, .88);
         const crownAt=THREE.MathUtils.lerp(THREE.MathUtils.lerp(earlyPeak,foldPeak,roll),latePeak,spill);
         const grow = THREE.MathUtils.smoothstep(localAge, .005, .23);
         const breakOff = 1 - THREE.MathUtils.smoothstep(localAge, .67, .995);
         const crest=tapered*(1-form.crown+form.crown*
-          Math.sin(along*form.crownRate+wave.index*.6+localAge*5+form.crownShift));
+          Math.sin(crownPhase+localAge*5+form.crownShift));
         const baseX = wave.x + wave.rightX * width + wave.forwardX * (bend + advance);
         const baseZ = wave.z + wave.rightZ * width + wave.forwardZ * (bend + advance);
         const amplitude = crest * grow * breakOff * far * lane * windLoad;
@@ -990,9 +1025,10 @@ function makeBreakers(compact) {
           if(feelsCrest)contact.crestAt(x,z,response);
           const offset=feelsCrest?.67:0;
           const load=feelsCrest?1-.93*response.gap+.62*response.bank+.75*response.rejoin:1;
-          const span=clearance(x-head.x,z-head.z,rightX,rightZ);
+          const dx=x-head.x,dz=z-head.z,distance=Math.sqrt(dx*dx+dz*dz);
+          const span=clearance(dx,dz,rightX,rightZ,distance);
           const contactFoot=feelsCrest?(response.bank*.92+response.rejoin*.68)*
-            THREE.MathUtils.smoothstep(Math.hypot(x-head.x,z-head.z),4.6,7.6):0;
+            THREE.MathUtils.smoothstep(distance,4.6,7.6):0;
           const compression=feelsCrest?Math.max(response.bank,response.rejoin)*(1-response.gap*.88):0;
           // The existing wave shoulder can run up above its submerged foot
           // briefly when compressed, while the bow's split still opens the center.
@@ -1004,16 +1040,20 @@ function makeBreakers(compact) {
           const y = datum + height * wave.height * energy;
           const vertex = slot * groupSize + i * rowSize + j;
           position.setXYZ(vertex, x-offset*response.x, y, z-offset*response.z);
-          breaker.setXYZ(vertex, energy, wave.index * 2.71, localAge);
+          breaker.setXYZ(vertex, energy, wave.seed, localAge);
           crown.setXY(vertex,crownAt,hand);
         }
       }
     }
-    geometry.setDrawRange(0, active * sections * samples * 6);
-    position.needsUpdate = true;
-    breaker.needsUpdate = true;
-    crown.needsUpdate = true;
-    geometry.computeVertexNormals();
+    const activeIndices=active*sections*samples*6,activeVertices=active*groupSize;
+    geometry.setDrawRange(0,activeIndices);
+    if(!active)return;
+    updateBreakerNormals(index,position.array,normal,activeVertices,activeIndices);
+    for(const attribute of [position,breaker,crown,normal]){
+      attribute.clearUpdateRanges();
+      attribute.addUpdateRange(0,activeVertices*attribute.itemSize);
+      attribute.needsUpdate=true;
+    }
   }
 
   return { mesh, update };

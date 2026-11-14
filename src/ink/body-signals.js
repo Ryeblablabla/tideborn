@@ -275,7 +275,7 @@ export class BodySignals {
         for(let i=0;i<ROW;i++)points[i].addScaledVector(this.alignment,1-smoothstep(i,0,SEGMENTS*.45));
       }
       cutVisible=this.inView(points[0],camera,true)&&this.inView(points[SEGMENTS>>1],camera);
-      const wet=frame.stage<2||(frame.stage===2&&frame.position.y<1.8);
+      const wet=frame.chapter<2||(frame.chapter===2&&frame.position.y<1.8);
       const width=clamp(.22+missing*.033,.24,.44);
       this.add(HURT,time,.68,points,{wet,side:this.cameraSide(points,camera,sign),offset:.08,spread:.73,width,alpha:.93});
     }

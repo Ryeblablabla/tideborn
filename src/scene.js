@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { STAGES, FOOD, random, TAU, clamp } from './model.js';
+import { STAGES, FORM_BY_STAGE, FOOD, random, TAU, clamp } from './model.js';
+import { intakeDeformation } from './ink/dragon-art-enemy-pose.js';
 
 const palette = { ink: '#204c50', mint: '#b8ebad', light: '#edfacd', teal: '#489e93', gold: '#f2cd79', pink: '#eba7b6', sand: '#e0d5a2' };
 const geo = {
@@ -128,16 +129,16 @@ export class OceanScene {
   setStage(stage) {
     if(this.stage===stage)return;this.stage=stage;
     this.head.clear();this.wings=new THREE.Group();this.head.add(this.wings);
-    const c=STAGES[stage].color;
+    const c=STAGES[stage].color, form=FORM_BY_STAGE[stage];
     add(this.head,mesh('sphere',c,[.78,.65,.88],[0,0,0],true),mesh('sphere',palette.light,[.61,.34,.64],[0,-.27,.42],true));
     for(const side of [-1,1]){
       add(this.head,mesh('sphere','#fff7d4',[.25,.28,.19],[side*.59,.17,.47],true),mesh('sphere',palette.ink,[.12,.18,.09],[side*.65,.17,.6],false,true),mesh('box','#fffce2',[.07,.08,.04],[side*.65-.035,.26,.68],false,true));
       add(this.head,mesh('sphere','#e9acac',[.15,.085,.1],[side*.65,-.12,.62],false,true));
       add(this.head,mesh('box',palette.ink,[.075,.045,.03],[side*.22,-.03,.91],false,true));
-      if(stage>=1){const ear=mesh('cone',stage>=3?'#f5ce87':'#5aa99e',[.22,.62,.12],[side*.7,.18,-.3],true);ear.rotation.z=side*-.85;this.head.add(ear);}
-      if(stage>=2){const whisker=mesh('box','#fae8af',[.65,.045,.045],[side*.8,-.15,.7]);whisker.rotation.y=side*-.4;this.head.add(whisker);}
-      if(stage>=3){const horn=mesh('cone','#f7dc9e',[.17,.9,.16],[side*.43,.85,-.2],true);horn.rotation.z=side*-.23;horn.rotation.x=-.3;this.head.add(horn);add(this.head,mesh('cone','#f7dc9e',[.1,.45,.1],[side*.58,1,-.35],true));}
-      if(stage>=4){
+      if(form>=2){const ear=mesh('cone',form>=3?'#f5ce87':'#5aa99e',[.22,.62,.12],[side*.7,.18,-.3],true);ear.rotation.z=side*-.85;this.head.add(ear);}
+      if(form>=2){const whisker=mesh('box','#fae8af',[.65,.045,.045],[side*.8,-.15,.7]);whisker.rotation.y=side*-.4;this.head.add(whisker);}
+      if(form>=3){const horn=mesh('cone','#f7dc9e',[.17,.9,.16],[side*.43,.85,-.2],true);horn.rotation.z=side*-.23;horn.rotation.x=-.3;this.head.add(horn);add(this.head,mesh('cone','#f7dc9e',[.1,.45,.1],[side*.58,1,-.35],true));}
+      if(form>=4){
         const g=new THREE.Group();g.position.set(side*.5,-.1,-.6);
         const shape=new THREE.Shape();shape.moveTo(0,0);shape.lineTo(side*2.8,1.8);shape.lineTo(side*2.4,.1);shape.lineTo(side*1.7,.4);shape.lineTo(side*1.6,-.6);shape.lineTo(side*.7,-.4);shape.lineTo(0,-.8);
         const wing=mesh(new THREE.ExtrudeGeometry(shape,{depth:.12,bevelEnabled:false}),'#f4e6b1',[1,1,1],[0,0,0],true);g.add(wing);this.wings.add(g);
@@ -147,7 +148,7 @@ export class OceanScene {
     add(this.head,mesh('box',palette.ink,[.22,.035,.025],[0,-.28,1.02],false,true));
     for(const b of this.body)b.material=material(c);
     this.feet.clear();
-    if(stage>=2)for(let i=0;i<4;i++){const foot=new THREE.Group();const s=i%2?1:-1;add(foot,mesh('sphere',c,[.19,.23,.5],[s*.2,-.1,0],true),mesh('sphere',palette.light,[.26,.15,.28],[s*.4,-.28,.25],true));this.feet.add(foot);}
+    if(form>=2)for(let i=0;i<4;i++){const foot=new THREE.Group();const s=i%2?1:-1;add(foot,mesh('sphere',c,[.19,.23,.5],[s*.2,-.1,0],true),mesh('sphere',palette.light,[.26,.15,.28],[s*.4,-.28,.25],true));this.feet.add(foot);}
   }
   makeEnemy(e) {
     const g=new THREE.Group(), type=e.type, bodyColors=['#e5b78e','#ed9eaa','#beb1dc','#9ac5d9','#cf9fbf','#e7b48d','#c4a4e0','#99bda3','#9cabc9'];
@@ -196,6 +197,31 @@ export class OceanScene {
     for(const e of items){live.add(e.id);let m=map.get(e.id);if(!m){m=create(e);map.set(e.id,m);}update(m,e);}
     for(const [id,m]of map)if(!live.has(id)){this.remove(m);map.delete(id);}
   }
+  syncEnemies(game, items=game.enemies, atHeight=false) {
+    const time=this.t;
+    this.sync(this.enemyMeshes,items,enemy=>this.makeEnemy(enemy),(mesh,enemy)=>{
+      mesh.position.set(enemy.x,atHeight?enemy.y-.6:0,enemy.z);
+      mesh.rotation.y=enemy.angle;
+      const creature=mesh.userData.creature;
+      const held = enemy.dragonArtHeldUntil > game.time;
+      if(!held)mesh.userData.frozenSwimTime=undefined;
+      const localTime=held?(mesh.userData.frozenSwimTime??=time):time;
+      creature.position.y=(enemy.boss?1.1:.55)+Math.sin(localTime*4+enemy.phase)*.08;
+      creature.rotation.z=Math.sin(localTime*5+enemy.phase)*.06;
+      creature.scale.setScalar((enemy.boss?2.6+game.stage*.16:1)*(!held&&enemy.hit>0?1.12:1));
+      if(this.isInk&&!enemy.boss){
+        const intake=intakeDeformation(enemy,game.activeDragonArt,game.time);
+        if(intake>0){
+          const mouth=enemy.dragonArtPullCenter;
+          mesh.rotation.y=Math.atan2(mouth.x-enemy.x,mouth.z-enemy.z);
+          creature.scale.x*=1-.55*intake;
+          creature.scale.y*=1-.42*intake;
+          creature.scale.z*=1+.57*intake;
+        }
+      }
+      if(mesh.userData.halo)mesh.userData.halo.rotation.z=time*.5;
+    });
+  }
   remove(m){this.scene.remove(m);const shared=new Set([...matCache.values(),creatureMat,outlineMat,shadowMat]);m.traverse(q=>{if(q.isMesh&&!shared.has(q.material))q.material.dispose();});}
   burst(x,z,color,n=10,big=false){
     for(let i=0;i<n;i++){if(this.particles.length>250)break;const m=mesh('box',color,[.09,.09,.09],[x,.6,z],false,true);this.scene.add(m);const a=Math.random()*TAU;this.particles.push({m,vx:Math.sin(a)*(1+Math.random()*3),vz:Math.cos(a)*(1+Math.random()*3),vy:1+Math.random()*4,life:big?1.2:.5+Math.random()*.3,max:1});}
@@ -231,7 +257,7 @@ export class OceanScene {
       }
       for(let i=count;i<this.body.length;i++)this.body[i].visible=false;
       this.spines.forEach((spine,i)=>{const b=this.body[i*2];spine.visible=game.stage>=1&&i*2<count&&b.visible;if(spine.visible){spine.position.copy(b.position);spine.position.y+=b.scale.y*.93;spine.scale.set(.12*scale,.32*scale,.18*scale);spine.material=material(game.stage>=3?'#efd293':'#5da99c');}});
-      this.feet.visible=game.stage>=2;
+      this.feet.visible=game.form>=2;
       this.feet.children.forEach((f,i)=>{const at=positions[i<2?2:Math.min(7,count-1)];if(at){f.position.set(at.x+(i%2?1:-1)*.7*scale,.55+rise,at.z);f.rotation.y=angle;f.rotation.x=Math.sin(t*5+i*Math.PI)*.2;f.scale.setScalar(scale);}});
       this.wings.children.forEach((wing,i)=>wing.rotation.y=Math.sin(t*4)*(i?-.25:.25));
       const d=this.dummy;let glowing=0;
@@ -242,7 +268,7 @@ export class OceanScene {
       });
       this.foodMesh.instanceMatrix.needsUpdate=true;if(this.foodMesh.instanceColor)this.foodMesh.instanceColor.needsUpdate=true;this.foodGlow.count=glowing;this.foodGlow.instanceMatrix.needsUpdate=true;
     }
-    this.sync(this.enemyMeshes,game.enemies,e=>this.makeEnemy(e),(m,e)=>{m.position.set(e.x,0,e.z);m.rotation.y=e.angle;const c=m.userData.creature;c.position.y=(e.boss?1.1:.55)+Math.sin(t*4+e.phase)*.08;c.rotation.z=Math.sin(t*5+e.phase)*.06;c.scale.setScalar((e.boss?2.6+game.stage*.16:1)*(e.hit>0?1.12:1));if(m.userData.halo)m.userData.halo.rotation.z=t*.5;});
+    if(!this.isInk)this.syncEnemies(game);
     this.sync(this.shotMeshes,game.shots,e=>{const m=e.kind==='bubble'?new THREE.Mesh(geo.bubble,material('#d4f5e3',true)):mesh('gem','#b1e98b',[.22,.22,.4],[0,0,0],true,true);if(e.kind==='bubble')m.rotation.x=-.6;this.scene.add(m);return m;},(m,e)=>{m.position.set(e.x,.9,e.z);m.rotation.z=t*2;});
     this.sync(this.hazardMeshes,game.hazards.filter(hazard=>!hazard.wave&&(!this.isInk||!hazard.warning)),e=>{let m;if(e.warning){m=new THREE.Group();const ring=new THREE.Mesh(geo.ring,new THREE.MeshBasicMaterial({color:'#ff8c84',transparent:true,opacity:.8}));ring.rotation.x=-Math.PI/2;ring.scale.setScalar(e.radius);m.add(ring);const circle=new THREE.Mesh(geo.disc,new THREE.MeshBasicMaterial({color:'#d76f7f',transparent:true,opacity:.25}));circle.scale.set(e.radius,.02,e.radius);m.add(circle);}else m=mesh('gem','#fa9b9f',[.24,.24,.24],[0,0,0],true,true);this.scene.add(m);return m;},(m,e)=>{m.position.set(e.x,e.warning?.1:.6,e.z);if(e.warning)m.scale.setScalar(.95+Math.sin(t*16)*.05);else m.rotation.y=t*3;});
     if (!this.isInk) this.sync(this.zoneMeshes,game.zones,e=>{const m=new THREE.Group();const color=e.kind==='fire'?'#ffcd8e':'#caefdf';for(let i=0;i<4;i++){const r=new THREE.Mesh(geo.ring,new THREE.MeshBasicMaterial({color,transparent:true,opacity:.6-i*.08}));r.rotation.x=-Math.PI/2;r.scale.setScalar(e.radius*(.5+i*.15));r.position.y=.08+i*.035;m.add(r);}this.scene.add(m);return m;},(m,e)=>{m.position.set(e.x,0,e.z);m.rotation.y=t*2;});

@@ -294,15 +294,15 @@ export class FormGrowth {
     const end = 1 + this.extra;
     const cursor = clamp(distance / end) * (count - 1);
     const a = Math.floor(cursor), b = Math.min(count - 1, a + 1), t = cursor - a;
-    for (let row = 0; row < 4; row++) {
-      for (let axis = 0; axis < 3; axis++) {
-        const first = array[(row * count + a) * 4 + axis];
-        const second = array[(row * count + b) * 4 + axis];
-        out[row * 3 + axis] = first + (second - first) * t;
-      }
+    const rowStride = count * 4;
+    // The binormal is rebuilt from the interpolated tangent and normal.
+    for (let row = 0, first = a * 4, second = b * 4; row < 9; row += 3, first += rowStride, second += rowStride) {
+      out[row] = array[first] + (array[second] - array[first]) * t;
+      out[row + 1] = array[first + 1] + (array[second + 1] - array[first + 1]) * t;
+      out[row + 2] = array[first + 2] + (array[second + 2] - array[first + 2]) * t;
     }
     let tx = out[3], ty = out[4], tz = out[5];
-    let tangentLength = Math.hypot(tx, ty, tz);
+    let tangentLength = Math.sqrt(tx * tx + ty * ty + tz * tz);
     if (tangentLength < 1e-6) {
       const nearest = (count + (t < .5 ? a : b)) * 4;
       tx = array[nearest]; ty = array[nearest + 1]; tz = array[nearest + 2];
@@ -311,7 +311,7 @@ export class FormGrowth {
     out[3] = tx /= tangentLength; out[4] = ty /= tangentLength; out[5] = tz /= tangentLength;
     const dot = out[6] * tx + out[7] * ty + out[8] * tz;
     let nx = out[6] - dot * tx, ny = out[7] - dot * ty, nz = out[8] - dot * tz;
-    let normalLength = Math.hypot(nx, ny, nz);
+    let normalLength = Math.sqrt(nx * nx + ny * ny + nz * nz);
     if (normalLength < 1e-6) {
       nx = -tz; ny = 0; nz = tx;
       if (Math.abs(ty) > .999) { nx = 0; ny = -tz; nz = ty; }

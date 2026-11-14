@@ -11,9 +11,9 @@ const idVertex = /* glsl */ `
   }
 `;
 const idFragment = /* glsl */ `
-  uniform vec3 uSurface;
+  uniform vec4 uSurface;
   ${dragonWashGLSL}
-  void main(){applyDragonWash();gl_FragColor=vec4(uSurface,1.);}
+  void main(){applyDragonWash();gl_FragColor=uSurface;}
 `;
 
 /** The same depth-tested geometry pass identifies brush owners and paper supports. */
@@ -25,7 +25,7 @@ export class MineralPalette {
       depthBuffer: true, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
     });
     this.saved = [];
-    this.surface = {value:new THREE.Vector3()};
+    this.surface = {value:new THREE.Vector4()};
     this.shapeWash = new THREE.Vector2();
     this.shapeWashAxis = new THREE.Vector3();
     this.colors = new Uint8Array(256 * 256 * 4);
@@ -49,7 +49,7 @@ export class MineralPalette {
       const id = this.id(object);
       const mineralHold=THREE.MathUtils.clamp(object.userData.inkMineralHold??0,0,1);
       const surfaceKind=object.userData.inkPaperSupport?1:.65*mineralHold;
-      this.surface.value.set(id % 256 / 255, Math.floor(id / 256) / 255, surfaceKind);
+      this.surface.value.set(id % 256 / 255, Math.floor(id / 256) / 255, surfaceKind, object.userData.inkDragonSubject ? .75 : 1);
       const wash=object.userData.dragonWash;
       if(wash){
         this.shapeWash.copy(wash);
@@ -73,7 +73,8 @@ export class MineralPalette {
       .replace('float radius = .75 + uWet * 3.7;', `
         float radius = .75 + uWet * 3.7;
         vec4 inkSupport = texture2D(tInkSurfaceId, paintUV);
-        float paperSupport = max(step(.9,inkSupport.b), 1.0 - inkSupport.a);
+        float covered = step(.25,inkSupport.a);
+        float paperSupport = max(step(.9,inkSupport.b), 1.0 - covered);
         float contactStain = 0.0;
         float contactPool = 0.0;
       `)
@@ -83,7 +84,7 @@ export class MineralPalette {
         if (uWetContact>.01) {
           vec4 otherSupport = texture2D(tInkSurfaceId, paintUV + offset * pixel * radius);
           float crosses = step(.001, length(otherSupport.rg-inkSupport.rg));
-          float otherPaper = max(step(.9,otherSupport.b), 1.0-otherSupport.a);
+          float otherPaper = max(step(.9,otherSupport.b), 1.0-step(.25,otherSupport.a));
           float nearEnough = step(wetDepth, depth + max(.06, depth * .018));
           contactStain += crosses * paperSupport * (1.0-otherPaper) * nearEnough
             * max(0.0, nearbyInk-ink-.065);
@@ -128,8 +129,12 @@ export class MineralPalette {
 
   id(mesh) { return mesh.id % 65535 + 1; }
 
-  isolateBrushes() {
-    for (const record of this.ink.records) {
+  materialFor(object) {
+    return object.userData.inkSurfaceMaterial ?? (object.material.wireframe ? this.wireMaterial : this.material);
+  }
+
+  isolateBrushes(records=this.ink.records) {
+    for (const record of records) {
       if (!record.brush) continue;
       const material = record.brush.material;
       if (!material.uniforms.tInkSurfaceId) {
@@ -155,6 +160,7 @@ export class MineralPalette {
     const old = renderer.getRenderTarget(), background = scene.background;
     const clear = renderer.getClearColor(new THREE.Color()), alpha = renderer.getClearAlpha();
     const tint = new THREE.Color();
+    let paletteDirty = false;
     this.saved.length = 0;
     scene.traverseVisible(object => {
       if (!object.isMesh && !object.isLine) return;
@@ -171,22 +177,29 @@ export class MineralPalette {
       while (colorOwner && !colorOwner.userData.inkTint) colorOwner = colorOwner.parent;
       const id = this.id(object);
       const offset = id * 4;
+      let r=this.colors[offset], g=this.colors[offset+1], b=this.colors[offset+2], opacityByte=0;
       if (colorOwner) {
         tint.set(colorOwner.userData.inkTint);
-        this.colors[offset] = Math.round(tint.r * 255);
-        this.colors[offset+1] = Math.round(tint.g * 255);
-        this.colors[offset+2] = Math.round(tint.b * 255);
-        this.colors[offset+3] = Math.round((colorOwner.userData.inkTintAmount ?? .6) * 255);
-      } else {
-        this.colors[offset+3] = 0;
+        r=Math.round(tint.r*255)&255;
+        g=Math.round(tint.g*255)&255;
+        b=Math.round(tint.b*255)&255;
+        opacityByte=Math.round((colorOwner.userData.inkTintAmount??.6)*255)&255;
+      }
+      if (r!==this.colors[offset] || g!==this.colors[offset+1] || b!==this.colors[offset+2] ||
+          opacityByte!==this.colors[offset+3]) {
+        this.colors[offset] = r;
+        this.colors[offset+1] = g;
+        this.colors[offset+2] = b;
+        this.colors[offset+3] = opacityByte;
+        paletteDirty = true;
       }
       const surfaceMaterial = object.userData.inkSurfaceMaterial;
       if (surfaceMaterial) {
         surfaceMaterial.uniforms.uSurface.value.set(id % 256 / 255, Math.floor(id / 256) / 255, 0);
       }
-      object.material = surfaceMaterial ?? (source.wireframe ? this.wireMaterial : this.material);
+      object.material = this.materialFor(object);
     });
-    this.texture.needsUpdate = true;
+    if (paletteDirty) this.texture.needsUpdate = true;
     try {
       scene.background = null;
       renderer.setRenderTarget(this.target);

@@ -5,6 +5,8 @@ const up = new THREE.Vector3(0, 1, 0);
 const forward = new THREE.Vector3(0, 0, 1);
 const rings = 76;
 const sides = 14;
+const frontStation = 9;
+const rearStation = 29;
 const forms = [
   {radius:.44, width:.44, height:.27, muzzle:.48, tint:'#4a6253'},
   {radius:.72, width:.64, height:.39, muzzle:.63, tint:'#384e43'},
@@ -74,6 +76,20 @@ function feather(parent, start, end, width) {
   parent.add(brushMesh(geometry, '#69604b', .44));
 }
 
+function contactNode(parent, x, y, z) {
+  const node = new THREE.Object3D();
+  node.position.set(x, y, z);
+  parent.add(node);
+  return node;
+}
+
+function wingContacts(group, side) {
+  return [
+    [0, 0, 0], [.45, .21, .12], [.93, .40, .22],
+    [2.42, .48, -.31], [3.19, .31, -.74], [3.67, .22, -.98],
+  ].map(([x, y, z]) => ({ bone: contactNode(group, side*x, y, z) }));
+}
+
 /** Open-source character made from mathematical profiles and mesh primitives. */
 export class PublicDragon {
   constructor(stage, ink) {
@@ -88,13 +104,17 @@ export class PublicDragon {
     this.jaw = new THREE.Group();
     this.root.add(this.head);
     this.head.add(this.jaw);
-    this.feet = [];
+    this.limbs = stage >= 2 ? { legs: [] } : null;
+    this.feet = this.limbs?.legs ?? [];
     this.wings = [];
+    if (stage === 4) this.flightLimbs = { wings: this.wings };
     this.dorsal = [];
     this.centers = Array.from({length:rings + 1}, () => new THREE.Vector3());
+    this.pathPoints = this.centers;
     this.tangent = new THREE.Vector3();
     this.lateral = new THREE.Vector3();
     this.vertical = new THREE.Vector3();
+    this.pawShift = new THREE.Vector3();
     const {width, height, muzzle, tint} = this.form;
     oval(this.head, tint, [0,.07,.10], [width,height,.62 + stage*.045]);
     oval(this.head, tint, [0,-.03,.50], [width*.74,height*.65,muzzle]);
@@ -114,18 +134,25 @@ export class PublicDragon {
       if (stage < 2) continue;
       for (const rear of [false,true]) {
         const group = new THREE.Group();
+        const digits = [];
         tube(group, [[0,.04,0],[side*.42,-.24,-.23],[side*.61,-.51,.12]], .15, tint);
         oval(group, tint, [side*.65,-.53,.19], [.24,.13,.29]);
         for (let digit=0;digit<3;digit++) {
           const x=side*.65+(digit-1)*.13;
           tube(group, [[x,-.52,.27],[x,-.58,.48],[x,-.68,.55]], .034, '#786d54');
+          digits.push(contactNode(group,x,-.68,.55));
         }
-        if (stage===4) tube(group, [[side*.66,-.52,.06],[side*.68,-.62,-.11],[side*.69,-.66,-.17]], .034, '#786d54');
+        if (stage===4) {
+          tube(group, [[side*.66,-.52,.06],[side*.68,-.62,-.11],[side*.69,-.66,-.17]], .034, '#786d54');
+          digits.push(contactNode(group, side*.69, -.66, -.17));
+        }
         this.root.add(group);
-        this.feet.push({group,rear,side});
+        this.feet.push({group,rear,side,digits,palm:contactNode(group,side*.65,-.53,.42),
+          ankle:contactNode(group,side*.61,-.51,.12),knee:contactNode(group,side*.42,-.24,-.23)});
       }
       if (stage===4) {
         const wing = new THREE.Group();
+        wing.userData.proceduralWing = true;
         tube(wing, [[0,0,0],[side*.93,.40,.22],[side*2.42,.48,-.31],[side*3.67,.22,-.98]], .13, tint);
         for (let index=0;index<8;index++) {
           const u=index/7;
@@ -133,7 +160,7 @@ export class PublicDragon {
             [side*(.68+3.28*u),-.12+.25*u,-1.76-.93*u], .40-.12*u);
         }
         this.root.add(wing);
-        this.wings.push({wing,side});
+        this.wings.push({wing,side,joints:wingContacts(wing,side)});
       }
     }
     if (stage >= 2) {
@@ -146,10 +173,12 @@ export class PublicDragon {
     }
     ink.register(this.root, {strokes:false, geometryInfluence:0, occlusionProxy:false, reserveStrength:.33,
       toneRange:[.13,.51], coherentInk:.14});
-    this.bridge={owner:this,entries:[]};
+    this.bridge={owner:this,root:this.root,entries:[]};
     for (const record of ink.records) {
-      if (!this.root.getObjectById(record.mesh.id)) continue;
-      this.bridge.entries.push({record});
+      const {mesh}=record;
+      if (!this.root.getObjectById(mesh.id)) continue;
+      const inkRole=mesh===this.body ? 'body' : mesh.parent?.userData.proceduralWing ? 'wing' : 'detail';
+      this.bridge.entries.push({mesh,record,inkRole,variant:'cap'});
       if (record.mesh !== this.body) continue;
       record.material.vertexShader = 'attribute vec3 inkRestPosition;\n' + record.material.vertexShader
         .replace('vPaint = (position - uCenter) * uObjectScale;', 'vPaint = (inkRestPosition - uCenter) * uObjectScale;');
@@ -157,6 +186,7 @@ export class PublicDragon {
   }
 
   update(spine, motion, length) {
+    this.motion=motion;
     const {centers,tangent,lateral,vertical} = this;
     for (let ring=0;ring<=rings;ring++) spine.atDistance(ring / rings * length / spine.scale, centers[ring]).multiplyScalar(spine.scale);
     const position = this.body.geometry.attributes.position;
@@ -181,14 +211,22 @@ export class PublicDragon {
     this.head.position.copy(centers[0]);
     this.head.quaternion.setFromUnitVectors(forward,tangent.subVectors(centers[0],centers[2]).normalize());
     this.jaw.rotation.x=.40*motion.jaw;
+    const gate=motion.gatePose;
     for (const {group,rear,side} of this.feet) {
-      const station = rear ? 29 : 9;
+      const station = rear ? rearStation : frontStation;
       this.posePart(group,station,side*.32);
       group.rotateX(.20 * Math.sin(motion.phase+side+(rear?2:0))-.34*motion.strike);
     }
+    this.chapterWingGrowth=motion.chapterWing ? this.chapterWingGrowth ?? [0,0] : undefined;
     for (const {wing,side} of this.wings) {
-      this.posePart(wing,9,side*.29);
-      wing.rotateZ(side*(.23+.52*Math.sin(motion.wingPhase*Math.PI*2)*(1-.8*motion.arrival)));
+      const chapter=motion.chapterWing;
+      const opening=chapter ? smoothstep(chapter.opening,side<0?0:.12,side<0?.88:1) : 1;
+      if (this.chapterWingGrowth) this.chapterWingGrowth[Number(side>0)]=opening;
+      this.posePart(wing,frontStation,side*.29);
+      wing.visible=opening>.005;
+      wing.scale.setScalar(Math.max(.005,opening));
+      const flap=.52*Math.sin(motion.wingPhase*Math.PI*2)*(1-.8*motion.arrival);
+      wing.rotateZ(side*(.23+flap-.53*(gate?.rainPress??0)+.37*(gate?.tuck??0)));
     }
     this.dorsal.forEach((fin,index) => {
       this.posePart(fin,4+index*3,0);
@@ -197,7 +235,9 @@ export class PublicDragon {
       fin.rotateZ(.17*Math.sin(motion.phase-index*.57));
     });
     this.root.updateMatrixWorld(true);
-    this.length=length;
+    this.courtContacts=null;
+    if (this.stage===4 && gate?.targets) this.plantPaws(gate);
+    this.lengthScale=length/spine.scale;
   }
 
   posePart(part, station, lateralOffset) {
@@ -213,10 +253,55 @@ export class PublicDragon {
 
   frontPalm(target, side) {
     const foot=this.feet.find(item=>!item.rear&&item.side===side);
-    return foot?.group.localToWorld(target.set(side*.65,-.53,.42));
+    return foot?.palm.getWorldPosition(target);
+  }
+
+  clawTip(target, digit) {
+    const side=this.motion?.clawSide ?? this.motion?.action?.side;
+    const foot=this.feet.find(item=>!item.rear&&item.side===(side>0?1:-1));
+    return foot?.digits[digit]?.getWorldPosition(target);
+  }
+
+  // The procedural model already poses its sockets in world space.
+  contactWorld(point, _parameters, out) {
+    return out.copy(point);
+  }
+
+  plantPaws(gate) {
+    for (const foot of this.feet) {
+      const side=Number(foot.side>0);
+      const target=gate.targets[side];
+      if (foot.rear || !target || !gate.pawWeight[side]) continue;
+      foot.digits[1].getWorldPosition(this.pawShift);
+      this.pawShift.subVectors(target.pawWorld,this.pawShift)
+        .clampLength(0,target.reach??1.55).multiplyScalar(gate.pawWeight[side]);
+      foot.group.position.add(this.pawShift);
+      foot.group.updateMatrixWorld(true);
+    }
+    if (gate.courtLandmark) this.courtContacts=this.pawPoints(false);
+  }
+
+  pawPoints(rear, part) {
+    return this.feet.filter(foot=>foot.rear===rear).map(foot=>
+      (part ? foot[part] : foot.digits[1]).getWorldPosition(new THREE.Vector3()));
+  }
+
+  finaleContacts() {
+    if (this.stage!==4) return null;
+    const wingPoints=joint=>this.wings.map(({joints})=>joints[joint].bone.getWorldPosition(new THREE.Vector3()));
+    return {
+      front:this.pawPoints(false), rear:this.pawPoints(true),
+      ankle:this.pawPoints(true,'ankle'), ankleAxis:this.pawPoints(true,'knee'),
+      wing:wingPoints(0), wingSeat:wingPoints(2), wingAxis:wingPoints(3),
+    };
+  }
+
+  lockedClawPoint(_landmark, target) {
+    const foot=this.feet.find(item=>!item.rear&&item.side>0);
+    return foot?.digits[1].getWorldPosition(target);
   }
 
   stats() {
-    return {totalLength:this.length ?? 1};
+    return {totalLength:this.lengthScale ?? 1};
   }
 }

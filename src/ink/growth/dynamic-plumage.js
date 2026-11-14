@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { ManeFlow } from './mane-flow.js';
+import { wingElevation } from './flight-stroke.js';
 
 const { clamp, smoothstep } = THREE.MathUtils;
 const X = new THREE.Vector3(1, 0, 0);
@@ -30,12 +31,11 @@ export class LiveFeathers {
     for (const bone of owner.body.skeleton.bones) {
       const feather = bone.name.match(/^DEF_feather_(\d+)_(base|tip)[._]?([LR])$/);
       const strand = bone.name.match(/^DEF_(whisker|beard)_(\d+)[._]?([LR])$/);
-      const pinion = bone.name.match(/^DEF_wing_0([45])[._]?([LR])$/);
-      if (!feather && !strand && !pinion) continue;
-      const index = Number(feather?.[1] ?? strand?.[2] ?? pinion[1]);
-      const kind = feather ? 'feather' : strand ? strand[1] : 'pinion';
+      if (!feather && !strand) continue;
+      const index = Number(feather?.[1] ?? strand[2]);
+      const kind = feather ? 'feather' : strand[1];
       const base = feather?.[2] === 'base';
-      const side = (feather?.[3] ?? strand?.[3] ?? pinion[2]) === 'L' ? -1 : 1;
+      const side = (feather?.[3] ?? strand[3]) === 'L' ? -1 : 1;
       const length = feather && base
         ? bone.children.find(child => child.isBone)?.position.length() ?? .06
         : bone.position.length();
@@ -80,6 +80,10 @@ export class LiveFeathers {
     this.time = this.flow.time;
     this.modelWind(.080, this.headWind);
     this.modelWind(.255, this.wingWind);
+    const wingPhase = motion?.wingPhase ?? this.time * .42;
+    const wingPower = motion?.wingPower ?? .46;
+    const arrival = motion?.arrivalStroke;
+    const live = 1 - (arrival?.blend ?? 0);
     for (const record of this.records) {
       record.baseline.copy(record.bone.quaternion);
       if (reset || !this.enabled) record.bend = record.twist = record.bendVelocity = record.twistVelocity = 0;
@@ -87,18 +91,6 @@ export class LiveFeathers {
       // Sample the skeleton before adding wind. Parent rotations carry the
       // subsequent deformation, and forces stay aligned to the animated pose.
       this.orientation.setFromRotationMatrix(this.boneRotation.extractRotation(record.bone.matrixWorld));
-      if (record.kind === 'pinion') {
-        // Let one primary fan open just ahead of the other. The flight
-        // pose still controls the shared shoulder and main wrist stroke.
-        const phase = TAU * (motion?.wingPhase ?? this.time * .42) - (record.index - 4) * .42;
-        const terminal = motion?.arrivalStroke?.blend ?? 0;
-        const bank = this.flow.turn;
-        const gap = (.17 + .052 * Math.cos(phase) + .09 * bank) * (1 - .83 * terminal);
-        this.spring(record, gap * (record.index === 4 ? .56 : .74), 0, record.index === 4 ? 15 : 12, step);
-        this.axisX.copy(Z).applyQuaternion(this.inverse.copy(this.orientation).invert());
-        record.bone.quaternion.multiply(this.rotation.setFromAxisAngle(this.axisX, record.bend));
-        continue;
-      }
       this.axisX.copy(X).applyQuaternion(this.orientation);
       this.axisZ.copy(Z).applyQuaternion(this.orientation);
       const feather = record.kind === 'feather';
@@ -108,18 +100,18 @@ export class LiveFeathers {
       let bend, twist, omega, twistAxis;
       if (feather) {
         const outer = 1 - smoothstep(record.index, 1, 15);
-        const lag = (record.base ? .30 : 1.0) + outer * .64;
-        const cycle = Math.sin(TAU * (motion?.wingPhase ?? this.time * .42) - lag + record.side * (.18 + outer * .19)) * (motion?.wingPower ?? .46);
-        const arrival = motion?.arrivalStroke;
-        const fade = arrival?.blend ?? 0;
-        const braking = (arrival?.load ?? 0) - .53 * (arrival?.recover ?? 0);
-        const residual = Math.sin(this.time * 2.35 - lag * 1.13 + record.side * .24)
-          * (.11 - .061 * (arrival?.hold ?? 0));
-        const stroke = THREE.MathUtils.lerp(cycle, braking * .52 + residual, fade);
-        const flex = record.base ? .31 : 1;
-        bend = clamp((pressure * record.length * 1.31 - .27 * stroke + .11 * this.flow.stream) * flex, -.34, .29);
-        twist = clamp((cross * record.length * .44 + .12 * stroke + record.side * .09 * this.flow.turn) * flex, -.16, .16);
-        omega = record.base ? 23 - outer * 3 : 12 - outer * 2;
+        const lag = (record.base ? .072 : .102) + outer * .06;
+        const phase = wingPhase + record.side * .016 - lag;
+        // The feather bends against the moving wing, then straightens near
+        // reversal. Its own spring adds a small lag to the long primaries.
+        const airLoad = (wingElevation(phase - .025) - wingElevation(phase + .025)) * (.70 + .30 * wingPower);
+        const braking = .06 * ((arrival?.load ?? 0) - .53 * (arrival?.recover ?? 0));
+        const ripple = Math.sin(this.time * 2.35 - TAU * lag + record.side * .24) * .015;
+        const bendLoad = THREE.MathUtils.lerp(braking + ripple, airLoad * .34, live);
+        const flex = record.base ? .36 : 1;
+        bend = clamp((pressure * record.length * .60 + bendLoad) * flex, -.15, .16);
+        twist = clamp((cross * record.length * .32 + record.side * (.07 * airLoad * live + .06 * this.flow.turn)) * flex, -.10, .10);
+        omega = record.base ? 24 - outer * 3 : 20 - outer * 3;
         twistAxis = Y;
       } else {
         const tip = clamp((record.index - 1) / (record.kind === 'whisker' ? 15 : 5), 0, 1);

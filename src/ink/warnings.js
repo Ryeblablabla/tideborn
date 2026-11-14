@@ -123,7 +123,7 @@ function warningBatch(geometry, tint, boundary, pressure=1, highLayer=false, occ
   return mesh;
 }
 
-function surfaceHeightSampler(water, fallback) {
+export function surfaceHeightSampler(water, fallback) {
   if(!water)return ()=>fallback;
   const {geometry,position}=water;
   const columns=(geometry.parameters?.widthSegments??1)+1;
@@ -310,7 +310,8 @@ export class InkWarnings {
       const lead=edge==='origin'?lerp(.44,1,1-outwardExit):edge==='limit'?lerp(.55,1,outwardExit):edge==='front'?1:
         Number(partners.every(other=>life<=other.life+.001));
       const urgency=edge==='front'?1:1-smoothstep(life,.05,.84);
-      const altitude=player?1-smoothstep(Math.abs(player.y-y),edge?.86:.95,edge?1.16:1.30):1;
+      const altitude=player&&hazard.attack!=='tide-lightning'?
+        1-smoothstep(Math.abs(player.y-y),edge?.86:.95,edge?1.16:1.30):1;
       const reach=player?1-smoothstep(playerRadius-radius,5,14):1;
       const width=edge?(edge==='limit'?lerp(.37,.49,lead):edge==='front'?.31:.43):
         shell?lerp(.39,.47,lead?urgency:0):clamp(radius*.10,.16,.28);

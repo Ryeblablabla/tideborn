@@ -1,0 +1,21 @@
+{
+  "name": "tideborn",
+  "main": "dist/server/index.js",
+  "compatibility_date": "2026-07-01",
+  "dev": {
+    "port": 4176
+  },
+  "assets": {
+    "directory": "dist/client",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tideborn-leaderboard",
+      "database_id": "00000000-0000-4000-8000-000000000000",
+      "migrations_dir": "drizzle"
+    }
+  ]
+}

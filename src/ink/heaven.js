@@ -1,24 +1,38 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { random } from '../rules.js';
+import { buildHeavenFinale, mountGateText } from './heaven-finale.js';
+import { vermilionTag } from './ending-foreshadow.js';
+import { mountCourtRoofRain } from './court-roof-rain.js';
 
 const STONE = 'whiteStone';
+const TERRACE_TOP = 'terraceTop';
 const PLINTH = 'batteredStone';
 const STONE_SEAT = 'stoneSeat';
 const STEPS = 'stairStone';
 const CARVING = 'stoneCarving';
 const TIMBER = 'timber';
 const SHADOWED_WOOD = 'shadowedWood';
+const GATE_BEAM = 'gateBeam';
+const GATE_BEAM_CROWN = 'gateBeamCrown';
+const GATE_BEAM_SPLIT = 'gateBeamSplit';
+const GATE_BEAM_CHECK = 'gateBeamCheck';
 const REAR_WALL = 'rearWall';
 const LACQUER = 'lacquer';
+const DOOR_LACQUER = 'doorLacquer';
 const WASHED_LACQUER = 'washedLacquer';
 const TILE = 'tile';
+const PORTAL_TILE = 'portalTile';
 const TILE_EDGE = 'tileEdge';
 const SOFFIT = 'soffit';
+const ROOF_RAFTER = 'roofRafter';
+const TILE_BREAK = 'tileBreak';
 const METAL = 'bronze';
 const CLIFF = 'cliff';
 const CLOUD_FOOT = 'cloudFoot';
 const smooth = THREE.MathUtils.smoothstep;
+const strikeBeamDepth=-10.6;
+const portalPostFraction=.137;
 const terraceCourses = {
   gate: [
     [.02,.17,0,0],[-.12,.19,0,0],[-.36,-.29,.13,.09],
@@ -44,20 +58,29 @@ const roofCourses = [
 
 const palette = {
   [STONE]: { name: '踏面白石', tint: '#ada38f', amount: .23, range: [.039, .24] },
+  [TERRACE_TOP]: { name: '石台踏面', tint: '#ada38f', amount: .23, range: [.039, .24] },
   [PLINTH]: { name: '斜收青灰石台', tint: '#847762', amount: .27, range: [.086,.31] },
   [STONE_SEAT]: { name: '承台斜收阴面', tint: '#756e62', amount: .31, range: [.18,.47] },
   [STEPS]: { name: '雨蚀主阶', tint: '#9c8e74', amount: .22, range: [.023,.15] },
   [CARVING]: { name: '望柱与栏板', tint: '#756b5a', amount: .22, range: [.11, .32] },
+  [ROOF_RAFTER]: { name: '瓦底干木椽', tint: '#88755e', amount: .67, range: [.31,.52] },
   [TIMBER]: { name: '斗拱梁枋', tint: '#58493d', amount: .35, range: [.25, .61] },
   [SHADOWED_WOOD]: { name: '暗檐与承梁', tint: '#373129', amount: .28, range: [.47, .78] },
+  [GATE_BEAM]: { name: '承重檐梁', tint: '#584337', amount: .82, range: [.31, .65] },
+  [GATE_BEAM_CROWN]: { name: '檐梁磨损处', tint: '#806348', amount: .75, range: [.25, .48] },
+  [GATE_BEAM_SPLIT]: { name: '檐梁新断木心', tint: '#b48756', amount: .86, range: [.14, .34] },
+  [GATE_BEAM_CHECK]: { name: '檐梁顺纹开绺', tint: '#45362b', amount: .75, range: [.44, .64] },
   [REAR_WALL]: { name: '内庭灰墙', tint: '#8b8171', amount: .31, range: [.17, .38] },
   [LACQUER]: { name: '朱漆檐柱', tint: '#913e2c', amount: .87, range: [.32, .69] },
+  [DOOR_LACQUER]: { name: '南天门积漆门板', tint: '#944c36', amount: .87, range: [.25, .65] },
   [WASHED_LACQUER]: { name: '飞檐下淡朱内柱', tint: '#a6654e', amount: .78, range: [.16, .43] },
-  [TILE]: { name: '重檐墨瓦', tint: '#2f302e', amount: .19, range: [.27, .68] },
+  [TILE]: { name: '重檐墨瓦', tint: '#344246', amount: .45, range: [.32, .71] },
+  [PORTAL_TILE]: { name: '门楼下檐灰青瓦', tint: '#485451', amount: .54, range: [.23, .56] },
+  [TILE_BREAK]: { name: '剥出的灰褐瓦胎', tint: '#746859', amount: .62, range: [.22,.52] },
   [SOFFIT]: { name: '深墨檐底', tint: '#282726', amount: .19, range: [.51, .77] },
   [TILE_EDGE]: { name: '瓦当与檐口', tint: '#46413a', amount: .18, range: [.38, .70] },
   [METAL]: { name: '脊饰与匾额', tint: '#a4824f', amount: .75, range: [.16, .46] },
-  [CLIFF]: { name: '仙山承台', tint: '#6c6053', amount: .25, range: [.115,.44] },
+  [CLIFF]: { name: '仙山承台', tint: '#6c6b59', amount: .37, range: [.10,.40] },
   [CLOUD_FOOT]: { name: '云脚近岩', tint: '#6b675d', amount: .22, range: [.07,.25] },
 };
 
@@ -69,12 +92,27 @@ class PalaceGeometry {
 
   add(kind, geometry, x = 0, y = 0, z = 0) {
     if(kind===LACQUER||kind===WASHED_LACQUER)weatherLacquer(geometry,x,z,kind===WASHED_LACQUER);
+    if ((kind === TILE || kind === PORTAL_TILE) && !geometry.hasAttribute('inkRoofPlane')) {
+      geometry.computeBoundingBox();
+      const { min, max } = geometry.boundingBox;
+      const position = geometry.attributes.position;
+      const plane = new Float32Array(position.count * 2);
+      const width = Math.max(.01, max.x - min.x), depth = Math.max(.01, max.z - min.z);
+      for (let i = 0; i < position.count; i++) {
+        plane[2 * i] = 2 * (position.getX(i) - min.x) / width - 1;
+        plane[2 * i + 1] = 2 * (position.getZ(i) - min.z) / depth - 1;
+      }
+      geometry.setAttribute('inkRoofPlane', new THREE.BufferAttribute(plane, 2));
+    }
     if(kind===PLINTH&&!geometry.hasAttribute('inkGuides')){
       geometry.setAttribute('inkGuides',new THREE.BufferAttribute(new Float32Array(geometry.attributes.position.count*2),2));
     }
     geometry.translate(x, y, z);
     const part = geometry.index ? geometry.toNonIndexed() : geometry;
-    if (part !== geometry) geometry.dispose();
+    if (part !== geometry) {
+      part.userData.palaceInkBounds=geometry.userData.palaceInkBounds;
+      geometry.dispose();
+    }
     part.deleteAttribute('uv');
     if (!this.parts.has(kind)) this.parts.set(kind, []);
     this.parts.get(kind).push(part);
@@ -103,9 +141,10 @@ class PalaceGeometry {
     this.add(kind, new THREE.TubeGeometry(curve, points.length + 2, radius, sides, false));
   }
 
-  commit(environment, root, depth = 1) {
+  commit(environment, root, depth = 1, fracture = null, stairWash = false) {
     for (const [kind, parts] of this.parts) {
       const pigment = palette[kind];
+      const inkBounds=parts.find(part=>part.userData.palaceInkBounds)?.userData.palaceInkBounds;
       const geometry = mergeGeometries(parts);
       for (const part of parts) part.dispose();
       const guide=geometry.attributes.inkGuides;
@@ -113,22 +152,80 @@ class PalaceGeometry {
         guide.setX(i,guide.getX(i)*depth);
         guide.setY(i,guide.getY(i)*(.73+.27*depth));
       }
-      const paleStone=kind===STONE||kind===STEPS;
-      const mesh = environment.add(root, geometry, [0, 0, 0], {
-        tint: pigment.tint,
+      const paleStone=kind===STONE||kind===STEPS||kind===TERRACE_TOP;
+      const groundWash=stairWash&&(kind===TERRACE_TOP||kind===STEPS||kind===PLINTH||kind===STONE_SEAT);
+      const tile=kind===TILE||kind===PORTAL_TILE;
+      const portalTile=tile&&inkBounds?.portal;
+      const fascia=kind===GATE_BEAM||kind===GATE_BEAM_CROWN||kind===GATE_BEAM_SPLIT||kind===GATE_BEAM_CHECK;
+      const brush=portalTile?'portalTile':tile?'tile':kind===CLIFF?'cliff':
+        kind===DOOR_LACQUER?'door':kind===LACQUER||kind===WASHED_LACQUER?'lacquer':
+        kind===PLINTH||kind===STONE_SEAT?'plinth':paleStone?'stone':
+        kind===REAR_WALL?'wall':kind===SOFFIT?'soffit':
+        fascia||kind===TIMBER||kind===SHADOWED_WOOD||kind===ROOF_RAFTER?'wood':'none';
+      const tint = new THREE.Color(pigment.tint);
+      tint.lerp(new THREE.Color('#969185'), (1-depth)*.64);
+      const settings = {
+        tint: `#${tint.getHexString()}`,
         amount: pigment.amount*(.52+.48*depth),
         profile: {
           toneRange:pigment.range.map(tone=>tone*depth),
-          reserveDirection:paleStone ? new THREE.Vector3(0,1,0) : new THREE.Vector3(-.51,.56,.55).normalize(),
-          reserveStrength:paleStone ? .19 : .08,
+          reserveDirection:paleStone||kind===GATE_BEAM_CROWN ? new THREE.Vector3(0,1,0) : new THREE.Vector3(-.51,.56,.55).normalize(),
+          reserveStrength:kind===GATE_BEAM_CROWN?.23:paleStone?.19:.08,
           geometryInfluence: 0,
           strokes: false,
-          coherentInk: (kind===CLIFF?.18:kind===TILE?.15:kind===PLINTH||kind===STONE_SEAT?.083:.04)*depth,
+          coherentInk: (kind===CLIFF?.13:tile?.14:kind===PLINTH||kind===STONE_SEAT?.083:.04)*depth,
         },
-      });
-      mesh.name = pigment.name;
+      };
+      const polish = mesh => {
+        mesh.name=pigment.name;
+        mesh.userData.palaceBrush={kind:brush,depth,contact:false,groundWash};
+        if(kind===GATE_BEAM_CROWN)mesh.userData.gateBeamCrown=true;
+        if(inkBounds)mesh.userData.palaceInkBounds=inkBounds;
+        if(fascia||kind===PORTAL_TILE)mesh.userData.inkMineralHold=kind===GATE_BEAM_CROWN?.30:portalTile?.12:.20;
+      };
+      if(fracture){
+        for(const [side,target] of fracture){
+          const section=fractureAlongGate(geometry,side);
+          if(section)polish(environment.add(target,section,[0,0,0],settings));
+        }
+        geometry.dispose();
+      }else polish(environment.add(root,geometry,[0,0,0],settings));
     }
   }
+}
+
+// Both masses share the same cut, including across the beam and its fascia.
+// Interpolate the original pigment guides at every new fracture vertex.
+function fractureAlongGate(geometry,side){
+  const attributes=Object.entries(geometry.attributes);
+  const output=attributes.map(()=>[]);
+  const p=geometry.attributes.position;
+  const distances=new Float32Array(p.count);
+  for(let i=0;i<p.count;i++){
+    const x=p.getX(i),y=p.getY(i),z=p.getZ(i);
+    distances[i]=side*(x-.42*Math.sin(z*.68+y*.54)-.29*Math.cos(z*.37-y*1.12));
+  }
+  const append=(a,b,t)=>{
+    for(let k=0;k<attributes.length;k++){
+      const {itemSize,array}=attributes[k][1];
+      for(let c=0;c<itemSize;c++)output[k].push(THREE.MathUtils.lerp(array[a*itemSize+c],array[b*itemSize+c],t));
+    }
+  };
+  for(let i=0;i<p.count;i+=3){
+    const polygon=[];
+    for(let j=0;j<3;j++){
+      const a=i+j,b=i+(j+1)%3,d=distances[a],e=distances[b];
+      if(d>=0)polygon.push([a,a,0]);
+      if((d<0)!==(e<0))polygon.push([a,b,d/(d-e)]);
+    }
+    for(let j=1;j<polygon.length-1;j++){
+      append(...polygon[0]);append(...polygon[j]);append(...polygon[j+1]);
+    }
+  }
+  if(!output[0].length)return null;
+  const section=new THREE.BufferGeometry();
+  attributes.forEach(([name,{itemSize}],i)=>section.setAttribute(name,new THREE.Float32BufferAttribute(output[i],itemSize)));
+  return section;
 }
 
 function weatherLacquer(geometry, columnX, columnZ, pale) {
@@ -171,7 +268,7 @@ function roofHeight(x, z, height, curl) {
 
 // Press the ink into the curved tile bed. A few dragged strokes follow the
 // same convergence as the modeled tile ribs, with paper left at their tips.
-function roofInk(across, down, phase, detail) {
+function roofInk(across, down, phase, detail, openRoof = false) {
   const slope=Math.abs(down);
   const hip=smooth(Math.abs(across),.53,.98);
   const rib=across/(.81+.19*slope);
@@ -193,71 +290,188 @@ function roofInk(across, down, phase, detail) {
     const dry=(1-smooth(Math.abs(strand+width*.49),width*.14,width*.49))*stroke*broken;
     white=Math.max(white,dry*(detail?.51:.36));
   }
-  return [ink,white];
+  // The exposed lower sweep has room for the dragon's silhouette. Broken
+  // white paint stays in a few hipped strokes, away from the central lintel.
+  const bay=openRoof?smooth(Math.abs(across),.16,.56):1;
+  return [ink*(openRoof?.72:1),white*bay*(openRoof?.76:1)];
 }
 
-function makeRoof(batch, x, y, z, width, depth, height, curl, detail) {
+function roofSurfacePoint(x,y,z,width,depth,height,curl,tile) {
+  return (u,v,drop=0)=>{
+    // The lower front tile course lands behind the exposed portal beam.
+    const exposedBay=tile===PORTAL_TILE?(1-smooth(Math.abs(u),.267,.43))*smooth(-v,.61,1):0;
+    return [
+      x + u * (width * .5 + .16 * Math.abs(v) ** 6),
+      y + roofHeight(u, v, height, curl) - drop + curl*.024*Math.sin(u*12.4+v*2.9)*Math.abs(v)**6,
+      z + v * (depth * .5 + .16 * Math.abs(u) ** 6) + 1.52 * exposedBay,
+    ];
+  };
+}
+
+function makeRoof(batch, x, y, z, width, depth, height, curl, detail, tile = TILE, looseCourses = []) {
   const columns = detail ? 60 : 22;
   const rows = detail ? 22 : 10;
   const stride = columns + 1;
   const topCount = stride * (rows + 1);
   const thickness = detail ? .43 : .32;
   const positions = [];
-  const topIndices = [], underIndices = [], tileGuides = [];
-  const point = (u, v, drop = 0) => [
-    x + u * (width * .5 + .16 * Math.abs(v) ** 6),
-    y + roofHeight(u, v, height, curl) - drop + curl*.024*Math.sin(u*12.4+v*2.9)*Math.abs(v)**6,
-    z + v * (depth * .5 + .16 * Math.abs(u) ** 6),
-  ];
+  const tileGuides = [];
+  const roofPlane = [];
+  const point=roofSurfacePoint(x,y,z,width,depth,height,curl,tile);
+  const shell = () => ({ top: [], under: [], broken: [] });
+  const parts = new Map([[batch,shell()]]);
+  const fractured=new Set(looseCourses.filter(course=>course.tear).map(({batch})=>batch));
+  for(const course of looseCourses){
+    const {start,end,steps}=course;
+    const u=(start+end)/columns-1;
+    const startDepth=course.heel?.reduce((sum,n)=>sum+n,0)??0;
+    const v=(startDepth+steps.reduce((sum,n)=>sum+n,0))/(steps.length*rows)-1;
+    course.origin.set(...point(u,course.ridge?.09:v,thickness*.50));
+    parts.set(course.batch,shell());
+  }
+  const courseAt=(row,column)=>{
+    if(row<0||row>=rows||column<0||column>=columns)return null;
+    return looseCourses.find(({start,end,steps,ridge,tear,heel})=>column>=start&&column<end
+      &&row>=(tear?heel[column-start]:ridge?8:0)&&row<steps[column-start])?.batch??batch;
+  };
 
   for (let layer = 0; layer < 2; layer++) {
     for (let row = 0; row <= rows; row++) {
       for (let column = 0; column <= columns; column++) {
         const u=column / columns * 2 - 1, v=row / rows * 2 - 1;
         positions.push(...point(u,v,layer * thickness));
-        if (layer===0)tileGuides.push(...roofInk(u,v,y*.61+z*.22,detail));
+        if (layer===0) {
+          tileGuides.push(...roofInk(u,v,y*.61+z*.22,detail,tile===PORTAL_TILE));
+          roofPlane.push(u,v);
+        }
         if (row === rows || column === columns) continue;
         const a = layer * topCount + row * stride + column;
-        if (layer === 0) topIndices.push(a, a + stride, a + 1, a + 1, a + stride, a + stride + 1);
-        else underIndices.push(a, a + 1, a + stride, a + 1, a + stride + 1, a + stride);
+        const owner=courseAt(row,column),{top,under}=parts.get(owner);
+        if (layer === 0) top.push(a, a + stride, a + 1, a + 1, a + stride, a + stride + 1);
+        else under.push(a, a + 1, a + stride, a + 1, a + stride + 1, a + stride);
       }
     }
   }
 
-  const boundary = [];
-  for (let column = columns; column >= 0; column--) boundary.push(column);
-  for (let row = 1; row <= rows; row++) boundary.push(row * stride);
-  for (let column = 1; column <= columns; column++) boundary.push(rows * stride + column);
-  for (let row = rows - 1; row > 0; row--) boundary.push(row * stride + columns);
-  for (let i = 0; i < boundary.length; i++) {
-    const a = boundary[i], b = boundary[(i + 1) % boundary.length];
-    underIndices.push(a, b, a + topCount, b, b + topCount, a + topCount);
+  for(let row=0;row<rows;row++)for(let column=0;column<columns;column++){
+    const owner=courseAt(row,column),{under,broken}=parts.get(owner);
+    const a=row*stride+column,b=a+1,c=a+stride,d=c+1;
+    for(const [neighbor,from,to] of [
+      [courseAt(row-1,column),b,a],[courseAt(row+1,column),c,d],
+      [courseAt(row,column-1),a,c],[courseAt(row,column+1),d,b],
+    ]){
+      if(neighbor===owner)continue;
+      const tear=fractured.has(owner)||fractured.has(neighbor);
+      if(!tear&&neighbor!==null&&owner===batch)continue;
+      (tear?broken:under).push(from,to,from+topCount,to,to+topCount,from+topCount);
+    }
   }
-  batch.add(TILE, indexedGeometry(positions.slice(0,topCount*3), topIndices, tileGuides));
-  batch.add(SOFFIT, indexedGeometry(positions, underIndices));
+  const roofTop=positions.slice(0,topCount*3);
+  // Subdivided meshes keep the intact shell's pigment coordinates. Once
+  // loose, the same pigment follows its tile rather than sliding in world.
+  const roofInkBounds=looseCourses.length?{
+    center:new THREE.Vector3(x,y+height*.38,z),
+    size:Math.max(width,depth)+.32,portal:true,
+  }:null;
+  for(const [owner,{top,under,broken}] of parts){
+    const roofSurface=indexedGeometry(roofTop,top,tileGuides);
+    roofSurface.setAttribute('inkRoofPlane', new THREE.Float32BufferAttribute(roofPlane, 2));
+    if(roofInkBounds)roofSurface.userData.palaceInkBounds=roofInkBounds;
+    owner.add(tile,roofSurface);
+    owner.add(SOFFIT,indexedGeometry(positions,under));
+    if(broken.length)owner.add(TILE_BREAK,indexedGeometry(positions,broken));
+  }
 
-  for (const side of [-1, 1]) {
-    const edge = Array.from({ length: 13 }, (_, i) => point(i / 6 - 1, side, .12));
-    const hip = Array.from({ length: 9 }, (_, i) => point(side, i / 4 - 1, .12));
-    batch.curve(TILE_EDGE, edge, thickness * .42);
-    batch.curve(TILE_EDGE, hip, thickness * .42);
-    if (detail) {
-      const count = Math.round(width / 1.35);
-      for (let i = 1; i < count; i++) {
-        const u = i / count * 2 - 1;
-        const [tileX, tileY, tileZ] = point(u, side, .06);
-        const cap = new THREE.CylinderGeometry(.13, .14, .35, 6).rotateX(Math.PI * .5);
-        batch.add(TILE_EDGE, cap, tileX, tileY, tileZ);
-        if (Math.abs(u) < .73 && i % 2 === 0) {
-          const ribs = Array.from({ length: 6 }, (_, j) => point(u * (1 - .19 * j / 5), side * (1 - .89 * j / 5), -.05));
-          batch.curve(TILE_EDGE, ribs, .05, 3);
+  // Give the front pieces the timber bed that carried the clay. These
+  // geometry batches already follow the animated split and keep each rib
+  // attached to its own course when the hidden ending overturns it.
+  if(looseCourses.length){
+    for(const course of looseCourses){
+      const {start,end,steps,ridge,spall,tear,heel:innerEdge}=course;
+      for(let c=start+1;c<end;c+=2){
+        const low=tear?Math.max(innerEdge[c-start-1],innerEdge[c-start]):ridge?8:0;
+        const high=Math.min(steps[c-start-1],steps[c-start]);
+        const v0=(low+.32)/rows*2-1;
+        const v1=(high-.21)/rows*2-1;
+        if(v1-v0<.09)continue;
+        const u=(c+.18*Math.sin(c*3.42))/columns*2-1;
+        const inset=thickness+.18;
+        const heel=point(u,v0,inset);
+        const head=point(u+Math.sin(c*5.21)*.004,v1,inset+.044);
+        const waist=point(u,(v0+v1)*.51,inset);
+        const width=.23+.15*Math.sin(c*4.4)**2;
+        const holder=course.batch;
+        // The short runs follow the underside pitch, leaving broad dark
+        // gaps between the scrubbed timber and the surrounding ceramic.
+        holder.segment(ROOF_RAFTER,heel,waist,width,.29);
+        holder.segment(ROOF_RAFTER,waist,head,width,.29);
+        const strip=point(u,v1-.029,inset+.039);
+        holder.segment(GATE_BEAM_SPLIT,strip,head,width+.013,.240);
+        if((ridge||spall)&&(c-start)%4===1){
+          const left=point(u-.023,v0+.12,inset+.17);
+          const right=point(u+.028,v0+.12,inset+.17);
+          holder.segment(SHADOWED_WOOD,left,right,.14,.17);
         }
       }
     }
   }
 
-  const ridge = Array.from({ length: 13 }, (_, i) => point((i / 6 - 1) * .63, 0, -.15));
-  batch.curve(METAL, ridge, detail ? .21 : .14);
+  for (const side of [-1, 1]) {
+    const edge = Array.from({ length: 13 }, (_, i) => point(i / 6 - 1, side, .12));
+    const hip = Array.from({ length: 9 }, (_, i) => point(side, i / 4 - 1, .12));
+    if(side>0||!looseCourses.length)batch.curve(TILE_EDGE, edge, thickness * .42);
+    else{
+      let start=0;
+      for(let column=1;column<=columns;column++){
+        const owner=courseAt(0,start);
+        if(courseAt(0,column)===owner)continue;
+        const knots=Array.from({length:Math.max(3,Math.ceil((column-start)/4)+1)},(_,i)=>i);
+        owner.curve(TILE_EDGE,knots.map(i=>point((start+(column-start)*i/(knots.length-1))/columns*2-1,-1,.12)),thickness*.42);
+        start=column;
+      }
+    }
+    batch.curve(TILE_EDGE, hip, thickness * .42);
+    if (detail) {
+      const count = Math.round(width / 1.35);
+      for (let i = 1; i < count; i++) {
+        const u = i / count * 2 - 1;
+        const column=Math.floor(i/count*columns);
+        const owner=side<0?courseAt(0,column):batch;
+        const [tileX, tileY, tileZ] = point(u, side, .06);
+        const cap = new THREE.CylinderGeometry(.13, .14, .35, 6).rotateX(Math.PI * .5);
+        owner.add(TILE_EDGE, cap, tileX, tileY, tileZ);
+        if (Math.abs(u) < .78 && i % 2 === 0) {
+          const show = tile!==PORTAL_TILE || Math.abs(u)>.31 && Math.sin(i*2.6+side)>.1;
+          if(!show)continue;
+          const run = tile===PORTAL_TILE ? .28+.44*Math.sin(i*2.17)**2 : .89;
+          const ribs = [];
+          for(let j=0;j<6;j++){
+            const along=u*(1-.19*j/5),up=side*(1-run*j/5);
+            if(side<0&&courseAt(Math.floor((up+1)*rows/2),Math.floor((along+1)*columns/2))!==owner)break;
+            ribs.push(point(along,up,-.04));
+          }
+          if(ribs.length>=2)owner.curve(TILE_EDGE, ribs, tile===PORTAL_TILE?.022:.036, 3);
+        }
+      }
+    }
+  }
+
+  const ridgeModules=looseCourses.filter(course=>course.ridge);
+  if(ridgeModules.length){
+    const seam = u => courseAt(rows/2,Math.min(columns-1,Math.floor((u+1)*columns*.5)));
+    let begin=-.63, owner=seam(begin);
+    for(let column=Math.ceil((begin+1)*columns*.5);column<=Math.floor(1.63*columns*.5)+1;column++){
+      const u=Math.min(.63,column/columns*2-1);
+      const next=seam(u+1e-5);
+      if(next===owner&&u<.63)continue;
+      owner.curve(METAL,Array.from({length:6},(_,i)=>point(THREE.MathUtils.lerp(begin,u,i/5),0,-.15)),.21);
+      begin=u;
+      owner=next;
+    }
+  }else{
+    const ridge=Array.from({length:13},(_,i)=>point((i/6-1)*.63,0,-.15));
+    batch.curve(METAL,ridge,detail?.21:.14);
+  }
   for (const side of [-1, 1]) {
     const end = point(side * .63, 0, -.22);
     const sweep = detail ? 1.15 : .74;
@@ -309,6 +523,10 @@ function chamferedPerimeter(width,depth,frontCut) {
   return points;
 }
 
+function gateApronInset(x){
+  return (x<0?.53:2.54)*smooth(Math.abs(x),12.4,24.5);
+}
+
 function terrace(batch,x,y,z,width,depth,height,frontCut,form) {
   const outline=chamferedPerimeter(width,depth,frontCut);
   const positions=[],guides=[],indices=[],seatIndices=[],capPositions=[x,y+.02,z],cap=[];
@@ -326,7 +544,12 @@ function terrace(batch,x,y,z,width,depth,height,frontCut,form) {
       const joint=Math.sin(u*.29+z*.18)+.39*Math.sin(u*.81-v*.44);
       const chipped=face*smooth(joint,-.65,.81);
       const px=x+u*(1+2*expansion/width)+.23*relief*Math.sin(u*.63+v*.23);
-      const pz=z+v*(1+2*expansion/depth)+relief*(.35*face+.89*chipped);
+      // The stair head fixes the inner line. Either side, the underside of
+      // the projecting stone cap sets back into a longer sloped retaining face.
+      const wing=form==='gate'?front*smooth(Math.abs(u),11.7,u<0?19.2:16.8):0;
+      const setback=wing*smooth(lower,.09,.57)*(1-.24*smooth(lower,.57,1))*(u<0?.72:1.63);
+      const apron=form==='gate'?gateApronInset(u)*front:0;
+      const pz=z+v*(1+2*expansion/depth)+relief*(.35*face+.89*chipped)+setback+apron;
       const edge=wear*face*(.67*Math.sin(u*.41+z*.16)+.33*Math.sin(u*.87+level*.9));
       positions.push(px,y+level+edge,pz);
       const stain=THREE.MathUtils.smoothstep(
@@ -338,8 +561,8 @@ function terrace(batch,x,y,z,width,depth,height,frontCut,form) {
       const underLip=1-THREE.MathUtils.smoothstep(Math.abs(lower-.31),.07,.24);
       const shelfShade=form?(.17*underLip+.12*toe)*face*(.64+.36*stain):0;
       const strata=1-smooth(Math.abs(Math.sin(u*.46+lower*3.5+z*.23)),.22,.66);
-      const pressure=(.045+.13*toe+.083*underLip)*(.46+.54*stain)+shelfShade;
-      guides.push(pressure,.22*(1-lower)*(1-stain)+strata*wear*face*.29);
+      const pressure=(.045+.13*toe+.083*underLip)*(.46+.54*stain)+shelfShade+wing*.16*underLip;
+      guides.push(pressure,.22*(1-lower)*(1-stain)+strata*wear*face*.29+wing*.17*smooth(lower,.39,.68));
       if(row===0)capPositions.push(px,y+.02,pz);
       if(row===rows.length-1)continue;
       const a=row*outline.length+i,b=row*outline.length+(i+1)%outline.length;
@@ -350,10 +573,19 @@ function terrace(batch,x,y,z,width,depth,height,frontCut,form) {
     }
   }
   for(let i=0;i<outline.length;i++)cap.push(0,1+(i+1)%outline.length,1+i);
-  batch.add(STONE,indexedGeometry(capPositions,cap));
+  batch.add(TERRACE_TOP,indexedGeometry(capPositions,cap));
   batch.add(PLINTH,indexedGeometry(positions,indices,guides));
   if(seatIndices.length)batch.add(STONE_SEAT,indexedGeometry(positions,seatIndices,guides));
-  return {x,y,z,width,depth,height,frontCut};
+  return {x,y,z,width,depth,height,frontCut,form,capPositions};
+}
+
+function terraceTopAt({capPositions},x,z){
+  let inside=false;
+  for(let i=3,j=capPositions.length-3;i<capPositions.length;j=i,i+=3){
+    const zi=capPositions[i+2],zj=capPositions[j+2];
+    if((zi>z)!==(zj>z)&&x<(capPositions[j]-capPositions[i])*(z-zi)/(zj-zi)+capPositions[i])inside=!inside;
+  }
+  return inside?capPositions[1]:-Infinity;
 }
 
 function stairFlight(batch, frontZ, backZ, lower, upper, width, steps, ramp = true) {
@@ -365,13 +597,25 @@ function stairFlight(batch, frontZ, backZ, lower, upper, width, steps, ramp = tr
   const rampSide = ramp ? width * .092 : 0;
   const footing = lower - 2.65;
   const intervals = ramp ? [[-side, -rampSide], [rampSide, side]] : [[-side, side]];
+  const sample = (x, z) => {
+    if (z<=frontZ) return lower;
+    if (z>=backZ) return upper;
+    if (ramp && Math.abs(x)<rampSide) return lower+.05+(z-frontZ)*(upper-lower)/(backZ-frontZ);
+    return lower+(Math.floor((z-frontZ)/stepDepth)+1)*stepRise;
+  };
   function quad(a,b,c,d,paint) {
     const index=positions.length/3;
     positions.push(...a,...b,...c,...d);
     for(const point of [a,b,c,d])guides.push(...(paint?paint(point):[0,0]));
     indices.push(index,index+1,index+2,index,index+2,index+3);
   }
-  const panels=batch.detail?7:4;
+  const panels=ramp?17:batch.detail?7:4;
+  const weather=(x,i,phase)=>{
+    const split=.53*Math.sin(x*1.15+i*.52+phase)+.31*Math.sin(x*3.35-i*.73)+.16*Math.sin(x*6.71+i*1.73);
+    const cluster=.50+.27*Math.sin(x*.90+i*.24+phase)+.22*Math.sin(x*1.41-i*.41+phase*.6);
+    const broken=smooth(split,.10,.66)*smooth(cluster,.30,.68);
+    return {cluster,broken};
+  };
   for (let i = 0; i < steps; i++) {
     const z = frontZ + i * stepDepth;
     const y = lower + i * stepRise;
@@ -391,13 +635,37 @@ function stairFlight(batch, frontZ, backZ, lower, upper, width, steps, ramp = tr
         const stroke=(riser?.029:.012)+band*(riser?.40:.19)*(.36+.64*upperLip)*cadence;
         const fray=smooth(Math.sin(cross*17+phase+i*.52),.03,.77);
         const paper=.32*band*upperLip*fray*(1-cadence*.68)+.12*(1-limit);
-        return [stroke*(ramp?1:.55),paper];
+        if(!ramp)return [stroke*.55,paper];
+        const {cluster,broken}=weather(x,i,phase);
+        const bloom=smooth(cluster,.26,.71);
+        const mineral=broken*(.38+.62*upperLip);
+        // Leave long intact sections between the dry breaks in the lip.
+        // The stains bridge adjacent courses, so they do not outline each step.
+        const load=stroke*.66+(riser?.066:.037)*bloom+mineral*(riser?.34:.35);
+        const dry=paper*.64+.23*(1-bloom)*(1-mineral)*upperLip;
+        return [load,dry];
       };
       for(let j=0;j<panels;j++){
         const a=THREE.MathUtils.lerp(left,right,j/panels);
         const b=THREE.MathUtils.lerp(left,right,(j+1)/panels);
-        quad([a,y,z],[a,top,z],[b,top,z],[b,y,z],point=>pressure(point,true));
-        quad([a,top,z],[a,top,z+stepDepth],[b,top,z+stepDepth],[b,top,z],point=>pressure(point,false));
+        if(!ramp){
+          quad([a,y,z],[a,top,z],[b,top,z],[b,y,z],point=>pressure(point,true));
+          quad([a,top,z],[a,top,z+stepDepth],[b,top,z+stepDepth],[b,top,z],point=>pressure(point,false));
+          continue;
+        }
+        const chip=x=>weather(x,i,phase).broken*smooth(Math.abs(x)-rampSide,.24,2.03)
+          *(1-smooth(Math.abs(x),side-1.2,side-.16));
+        const da=chip(a),db=chip(b);
+        // Keep the top flat at the authored height; only notch the
+        // projecting edge of the flank, clear of the ramp and rail.
+        const bite=Math.min(.155,stepDepth*.37);
+        const bevel=point=>pressure(point,true).map((tone,k)=>k===0?tone+.16:tone*.71);
+        quad([a,y,z],[a,top-.12*da,z],[b,top-.12*db,z],[b,y,z],point=>pressure(point,true));
+        if(da+db>.001)quad([a,top-.12*da,z],[a,top,z+bite*da],
+          [b,top,z+bite*db],[b,top-.12*db,z],bevel);
+        const crest=Math.min(.19,stepDepth*.49);
+        quad([a,top,z+bite*da],[a,top,z+crest],[b,top,z+crest],[b,top,z+bite*db],point=>pressure(point,false));
+        quad([a,top,z+crest],[a,top,z+stepDepth],[b,top,z+stepDepth],[b,top,z+crest],point=>pressure(point,false));
       }
     }
     quad([-side, footing, z], [-side, footing, z + stepDepth], [-side, top, z + stepDepth], [-side, top, z]);
@@ -418,6 +686,8 @@ function stairFlight(batch, frontZ, backZ, lower, upper, width, steps, ramp = tr
     const x = sign * (side - .23);
     railing(batch, [x, lower, frontZ], [x, upper, backZ], 1.7);
   }
+  sample.contains=(x,z)=>Math.abs(x)<=side&&z>=frontZ&&z<=backZ;
+  return sample;
 }
 
 // The rock starts inside the actual chamfered stone terrace and turns
@@ -444,18 +714,20 @@ function pedestalCliff(batch,x,z,radiusX,radiusZ,height,seed,footprint,cleft=0) 
       const cut=Math.cos(theta*4.1-drop*3.6+seed*.13);
       const folds=.96+.14*cut+.047*Math.sin(theta*9.1+drop*5.7+seed);
       const radius=spread*ridge*folds;
-      const seatZ=footprint.z+Math.sign(cz)*Math.abs(cz)**.29*(footprint.depth*.5-.15);
+      const seatDepth=Math.sign(cz)*Math.abs(cz)**.29*(footprint.depth*.5-.15);
+      const seatZ=footprint.z+seatDepth;
       const cutback=Math.max(0,(footprint.frontCut??0)-(seatZ-footprint.z+footprint.depth*.5));
       const seatX=footprint.x+Math.sign(cx)*Math.min(
         Math.abs(cx)**.29*(footprint.width*.5-.22),footprint.width*.5-.22-cutback,
       );
+      const apron=footprint.form==='gate'?gateApronInset(seatX)*smooth(-2*seatDepth/footprint.depth,.36,.97):0;
       const knife=cleft*(1-smooth(Math.abs(cx-.35),.03,.33))*smooth(-cz,.29,.77);
       const front=smooth(-cz,.39,.93);
       const bed=front*smooth(drop,.05,.36)*(1-.51*smooth(drop,.59,1));
       const fault=cleft*bed*(.33+.67*smooth(Math.sin(theta*5+seed*.81),-.23,.76));
       const recess=knife*smooth(drop,.04,.38)*(1-.36*smooth(drop,.57,1))+fault*.58;
       const px=THREE.MathUtils.lerp(seatX,x+Math.cos(twist)*radiusX*radius,shoulder)+recess*.48;
-      const pz=THREE.MathUtils.lerp(seatZ,z+Math.sin(twist)*radiusZ*radius,shoulder)+recess;
+      const pz=THREE.MathUtils.lerp(seatZ+apron,z+Math.sin(twist)*radiusZ*radius,shoulder)+recess;
       const stratum=theta+drop*.89+.18*Math.sin(seed*.4);
       const plane=Math.sin(stratum*3.0)*.58+Math.sin(stratum*4.7+.83)*.26;
       const foot=THREE.MathUtils.smoothstep(drop,.42+.20*Math.sin(theta*2.3+seed),.97);
@@ -489,22 +761,63 @@ function brackets(batch, x, y, z, size, direction) {
   }
 }
 
-function buildHall(batch, { x, y, z, width, depth, height, tiers, portal = false, detailed = false, screened = false, softCenter = false }) {
+function clerestory(batch, x, y, z, width, depth, height) {
+  // The front screen is a shallow open gallery. The panel at the back of
+  // each end bay lies beyond the posts and the two black ceiling beams.
+  const sill=y+.36,top=y+height+.06;
+  const front=z-depth*.50,back=z+depth*.50,screen=front+depth*.32;
+  batch.box(TIMBER,x,sill-.14,z,width,.38,depth);
+  batch.box(SHADOWED_WOOD,x,top-.21,z,width+.10,.52,depth);
+  batch.box(REAR_WALL,x,(sill+top)*.5,back-.22,width,top-sill,.52);
+  for(const side of [-1,1]){
+    batch.box(TIMBER,x+side*(width*.5-.22),(sill+top)*.5,z,.44,top-sill,depth);
+    batch.box(STONE,x+side*width*.339,sill+.075,front+.79,width*.29,.13,1.55);
+  }
+  const spans=[[-.463,-.314],[-.283,-.110],[-.081,.109],[.138,.288],[.322,.463]];
+  for(const [i,[a,b]] of spans.entries()){
+    const center=x+width*(a+b)*.5,span=width*(b-a);
+    const floor=sill+(i===2?.43:.20),head=top-(i===2?.46:.59);
+    const backset=screen+(i===3?1.24:i===2?2.0:0);
+    const panel=i===2?SHADOWED_WOOD:i===3?TIMBER:REAR_WALL;
+    batch.box(panel,center,(floor+head)*.5,backset,span,head-floor,.32);
+    batch.box(TIMBER,center,head+.10,front+.37,span+.38,.23,.70);
+    batch.box(i===2?TIMBER:CARVING,center,floor-.10,front+.25,span+.42,.22,.56);
+    for(const side of [-1,1]){
+      const post=center+side*(span*.5+.10);
+      batch.box(TIMBER,post,(sill+top)*.5,front+.22,.36,top-sill,.55);
+      batch.box(SHADOWED_WOOD,post,(head+floor)*.5,(front+backset)*.5,.12,head-floor,backset-front);
+      batch.box(CARVING,post,head+.27,front+.20,.57,.21,.61);
+    }
+    if(i===0||i===4){
+      for(const offset of [-.18,.15]){
+        batch.box(TIMBER,center+offset*span,(floor+head)*.5,backset-.21,.15,head-floor,.16);
+      }
+    }
+  }
+}
+
+function buildHall(batch, { x, y, z, width, depth, height, tiers, portal = false, detailed = false, screened = false, softCenter = false, moving = null }) {
   const columnRadius = Math.max(.25, height * .054);
   const columnXs = portal ? [-.43, -.30, -.137, .137, .30, .43] : [-.40, -.22, 0, .22, .40];
   for (const fraction of columnXs) {
-    const columnX = x + width * fraction;
     for (const direction of [-1, 1]) {
-      const columnZ = z + direction * depth * .40;
+      // Open a longer view through the far aisle while keeping both front
+      // colonnades and the center bearing posts where they meet the eave.
+      const outerAisle=portal&&direction>0&&fraction===.30;
+      const columnX=x+width*(fraction+(outerAisle?.031:0));
+      const strikePost=portal&&moving&&direction<0&&Math.abs(fraction)===portalPostFraction;
+      const columnZ = z + (strikePost?strikeBeamDepth:direction*depth*.40);
       batch.box(PLINTH,columnX,y+.041,columnZ,columnRadius*3.54,.112,columnRadius*3.54);
       batch.column(STONE, columnX, y + .21, columnZ, columnRadius * 1.28, columnRadius * 1.65, .43);
       batch.column(CARVING, columnX, y + .47, columnZ, columnRadius * 1.07, columnRadius * 1.26, .16);
       const pale=portal&&(fraction===-.137||fraction===.137&&direction>0);
-      batch.column(pale?WASHED_LACQUER:LACQUER,columnX,y+(height+.55)*.5,columnZ,columnRadius*.84,columnRadius,height-.55);
-      batch.column(TIMBER, columnX, y + height - .22, columnZ, columnRadius * 1.07, columnRadius * 1.01, .40);
-      if (detailed) brackets(batch, columnX, y + height, columnZ, height / 10, direction);
+      const columnBatch=moving?.pillars.get(`${fraction}:${direction}`)??batch;
+      columnBatch.column(pale?WASHED_LACQUER:LACQUER,columnX,y+(height+.55)*.5,columnZ,columnRadius*.84,columnRadius,height-.55);
+      columnBatch.column(TIMBER, columnX, y + height - .22, columnZ, columnRadius * 1.07, columnRadius * 1.01, .40);
+      if (detailed&&!strikePost) brackets(columnBatch, columnX, y + height, columnZ, height / 10, direction);
     }
   }
+  batch=moving?.roof??batch;
   for (const direction of [-1, 1]) {
     const beamZ = z + direction * depth * .40;
     batch.box(TIMBER, x, y + height + .46, beamZ, width * .94, .74, .94);
@@ -514,8 +827,14 @@ function buildHall(batch, { x, y, z, width, depth, height, tiers, portal = false
     }
     if (detailed) {
       for (let i = -12; i <= 12; i++) {
+        if(portal&&direction<0&&i%2!==0&&Math.abs(i)>4)continue;
         const rafterX = x + i * width / 26;
-        batch.box(TIMBER, rafterX, y + height + 1.32, z + direction * depth * .47, .24, .24, depth * .25);
+        const heavy=portal&&direction<0&&i%4===0;
+        const loose=direction<0?moving?.spallRafters.find(member=>member.index===i):null;
+        const holder=loose?.batch??batch;
+        const rafterY=y+height+1.32,rafterZ=z+direction*depth*.47;
+        holder.box(TIMBER,rafterX,rafterY,rafterZ,heavy?.38:.24,heavy?.31:.24,depth*.25);
+        if(loose)loose.origin.set(rafterX,rafterY,rafterZ);
       }
     }
   }
@@ -526,23 +845,22 @@ function buildHall(batch, { x, y, z, width, depth, height, tiers, portal = false
     for (const fraction of columnXs) {
       batch.box(TIMBER, x + width * fraction, baseY - .67, z, .38, .25, depth * .91);
     }
+    if(portal){
+      for(const side of [-1,1]){
+        batch.box(SHADOWED_WOOD,x+side*width*.363,y+height-.28,z+depth*.20,width*.137,.54,depth*.42);
+        batch.box(TIMBER,x+side*width*.363,y+height-.70,z+depth*.385,width*.156,.37,.75);
+      }
+    }
   }
   if (screened) addRearScreen(batch,x,y,z+depth*.29,width*.79,height*.83,softCenter);
-  makeRoof(batch, x, baseY, z, width * 1.13, depth * 1.28, tiers > 1 ? 4.3 : height * .42, detailed ? 1.9 : 1.15, detailed);
+  makeRoof(batch, x, baseY, z, width * 1.13, depth * 1.28, tiers > 1 ? 4.3 : height * .42,
+    detailed ? 1.9 : 1.15, detailed, portal?PORTAL_TILE:TILE, moving?.tiles.filter(course=>!course.upper));
 
   if (portal) {
-    batch.box(TIMBER, x, y + height - .43, z - depth * .46, 6.4, 1.62, .34);
-    batch.box(METAL, x, y + height - .43, z - depth * .469, 5.95, 1.21, .10);
-    batch.box(TIMBER, x, y + height - .43, z - depth * .475, 5.66, .95, .08);
-    const textY = y + height - .43;
-    const textZ = z - depth * .475 - .066;
-    const mark = (a, b) => batch.segment(METAL, [x - a[0], textY + a[1], textZ], [x - b[0], textY + b[1], textZ], .065, .032);
-    for (const [a, b] of [
-      [[-1.17, .25], [-.63, .25]], [[-1.25, .06], [-.53, .06]],
-      [[-.90, .24], [-.91, -.09]], [[-.91, -.09], [-1.26, -.33]], [[-.91, -.05], [-.55, -.31]],
-      [[.62, .32], [.73, .23]], [[.52, .16], [.52, -.33]],
-      [[.76, .24], [1.22, .24]], [[1.22, .24], [1.22, -.30]], [[1.22, -.30], [1.10, -.34]],
-    ]) mark(a, b);
+    const plaque=moving?.plaque??batch;
+    plaque.box(TIMBER, x, y + height - .43, z - depth * .46, 6.4, 1.62, .34);
+    plaque.box(METAL, x, y + height - .43, z - depth * .469, 5.95, 1.21, .10);
+    plaque.box(TIMBER, x, y + height - .43, z - depth * .475, 5.66, .95, .08);
   }
 
   if (tiers === 1) return;
@@ -550,10 +868,11 @@ function buildHall(batch, { x, y, z, width, depth, height, tiers, portal = false
   const tierHeight = detailed ? 3.4 : 2.6;
   const tierWidth = width * .72;
   const tierDepth = depth * .70;
-  // The upper floor sits behind the roof's lip. Larger, grouped panes
-  // give the main eave a readable silhouette at both ends of the flight.
-  batch.box(TIMBER, x, tierBase + tierHeight * .46, z, tierWidth, tierHeight * 1.17, tierDepth);
-  for (const direction of [-1, 1]) {
+  // The gate has a gallery between the two eaves. The quieter distant
+  // halls retain simpler infill on their much smaller window band.
+  if(portal)clerestory(batch,x,tierBase,z,tierWidth,tierDepth,tierHeight);
+  else batch.box(TIMBER, x, tierBase + tierHeight * .46, z, tierWidth, tierHeight * 1.17, tierDepth);
+  if(!portal)for (const direction of [-1,1]) {
     const galleryZ=z+direction*(tierDepth*.5+.13);
     batch.box(TIMBER,x,tierBase+tierHeight*.32,galleryZ,tierWidth*.96,.18,.34);
     batch.box(TIMBER,x,tierBase+tierHeight*.82,galleryZ,tierWidth*.96,.20,.34);
@@ -572,7 +891,8 @@ function buildHall(batch, { x, y, z, width, depth, height, tiers, portal = false
       }
     }
   }
-  makeRoof(batch, x, tierBase + tierHeight + .28, z, tierWidth * 1.18, tierDepth * 1.31, detailed ? 4.85 : 3.05, detailed ? 2.15 : 1.1, detailed);
+  makeRoof(batch, x, tierBase + tierHeight + .28, z, tierWidth * 1.18, tierDepth * 1.31,
+    detailed ? 4.85 : 3.05, detailed ? 2.15 : 1.1, detailed, TILE, moving?.tiles.filter(course=>course.upper));
 }
 
 function sideSteps(batch, direction) {
@@ -669,8 +989,11 @@ function coveredWalk(batch, direction) {
   }
   // A receding roof and terrace appear only in the outer bays. The
   // central stair continues uninterrupted towards the distant hall.
-  makeRoof(batch, x, roofY, z, width * 1.34, depth * 1.09, 2.0, .95, false);
-  addRearScreen(batch, x, y, z + depth * .35, width * .89, 4.3);
+  const surface=[x,roofY,z,width*1.34,depth*1.09,2.0,.95];
+  makeRoof(batch,...surface,false);
+  if(direction<0)addRearScreen(batch, x, y, z + depth * .35, width * .89, 4.3);
+  return {direction,point:roofSurfacePoint(...surface,TILE),
+    center:{x,z},halfSize:{x:surface[3]*.5,z:surface[4]*.5}};
 }
 
 // Open longitudinal gallery, with a gable facing the ascent instead of a
@@ -957,6 +1280,309 @@ function cloudFoot(batch, x, y, z, width, depth, peak, seed) {
   batch.add(CLOUD_FOOT,indexedGeometry(points,indices,guides));
 }
 
+function gateBeam(side, batch, split){
+  const profile=[
+    [13.67,-11.24],[13.78,-11.42],[14.29,-11.46],[14.50,-11.27],
+    [14.50,-9.98],[14.26,-9.81],[13.80,-9.86],[13.65,-10.07],
+  ];
+  const breakGrain=[.04,-.20,-.085,.12,-.14,.19,.04,-.14];
+  const stations=[0,.25,.85,1.65,2.55,3.50,4.46,5.64,6.48,7.15];
+  const point=(distance,i)=>{
+    const [y,z]=profile[i];
+    const x=distance===0?breakGrain[i]:side*distance;
+    const swell=smooth(distance,2.1,6.6);
+    const face=Math.sign(z+10.6);
+    return [x,y+(y<14.48?swell*.045*Math.sin(x*1.44+i):0),
+      z+swell*face*(.06*Math.sin(x*1.06+i*.36)-.08)];
+  };
+  const indices=(faces)=>side>0?faces:faces.map((id,i)=>i%3===1?faces[i+1]:i%3===2?faces[i-1]:id);
+
+  for(let i=0;i<profile.length;i++){
+    const next=(i+1)%profile.length;
+    const positions=[],faces=[],guides=[];
+    const top=i===3;
+    for(const [index,distance] of stations.entries()){
+      for(const corner of [i,next]){
+        const x=side*distance;
+        positions.push(...point(distance,corner));
+        const mottling=.5+.5*Math.sin(x*1.23+corner*.65);
+        const wear=1-smooth(distance,1.65,5.75);
+        const shoulder=smooth(distance,5.1,7.15);
+        const edge=(corner===i?1:.41);
+        guides.push(top?.085+(1-wear)*.18+shoulder*.16+mottling*.10:
+          .14+.21*edge+.17*shoulder+.08*mottling,
+          top?wear*(.23+.13*mottling):.06*(1-shoulder)*mottling);
+      }
+      if(index<stations.length-1){
+        const a=index*2;
+        faces.push(a,a+1,a+2,a+1,a+3,a+2);
+      }
+    }
+    batch.add(top?GATE_BEAM_CROWN:GATE_BEAM,indexedGeometry(positions,indices(faces),guides));
+  }
+
+  // A short tongue enters the dark bearing at each end. The split face is
+  // a separate mesh, revealed by the existing moving halves after impact.
+  const face=(distance,center,inside)=>{
+    const positions=center.slice(),faces=[],guides=inside?[.33,.16]:[.41,.045];
+    for(let i=0;i<profile.length;i++){
+      positions.push(...point(distance,i));
+      guides.push(inside?.095+.19*Math.sin(i*2.23)**2:.33+.17*Math.sin(i*2.23)**2,
+        inside?.12+.13*Math.sin(i*.84)**2:.025);
+      const a=1+i,b=1+(i+1)%profile.length;
+      faces.push(0,inside?b:a,inside?a:b);
+    }
+    return indexedGeometry(positions,indices(faces),guides);
+  };
+  batch.add(GATE_BEAM,face(7.15,[side*7.15,14.03,-10.63],false));
+  split.add(GATE_BEAM_SPLIT,face(0,[side*.23,14.06,-10.69],true));
+
+  // A few checks run along the grain and taper into the rubbed surface.
+  // They follow the physical top and front faces as the beam separates.
+  for(const [from,to,z,y,width,phase] of [
+    [.32,3.12,-10.98,14.507,.044,1.2],[1.98,5.92,-10.52,14.507,.069,2.3],
+    [3.7,6.85,-10.13,14.507,.035,.8],[.52,3.98,-11.461,14.11,.045,1.5],
+  ]){
+    const positions=[],faces=[],guides=[];
+    const top=y>14.50;
+    for(let i=0;i<=8;i++){
+      const fraction=i/8;
+      const x=side*THREE.MathUtils.lerp(from,to,fraction);
+      const w=width*Math.sin(Math.PI*fraction);
+      const grain=.049*Math.sin(x*1.15+phase)+.015*Math.sin(x*3.17);
+      if(top)positions.push(x,y,z+grain-w,x,y,z+grain+w);
+      else positions.push(x,y+grain-w,z,x,y+grain+w,z);
+      guides.push(.20,.02,.29,.025);
+      if(i<8)faces.push(2*i,2*i+1,2*i+2,2*i+1,2*i+3,2*i+2);
+    }
+    batch.add(GATE_BEAM_CHECK,indexedGeometry(positions,indices(faces),guides));
+  }
+}
+
+function gateBeamBearing(batch, x, z){
+  // The cap and the three crossing members sit directly above the column.
+  batch.column(WASHED_LACQUER,x,11.69,z,.60,.54,.42,12);
+  batch.box(TIMBER,x,12.04,z,1.36,.39,1.26);
+  batch.box(GATE_BEAM,x,12.43,z-.03,1.82,.38,1.33);
+  batch.box(TIMBER,x,12.78,z+.05,1.13,.36,1.92);
+  batch.box(GATE_BEAM,x,13.13,z,2.08,.35,1.47);
+  batch.box(SHADOWED_WOOD,x,13.47,z,1.22,.36,1.64);
+  batch.box(TIMBER,x,13.61,z-.04,1.45,.28,1.67);
+  for(const cheek of [-1,1]){
+    batch.segment(TIMBER,[x+cheek*.25,12.16,z-.52],[x+cheek*.91,13.09,z-.52],.28,.30);
+    batch.box(GATE_BEAM,x+cheek*.53,13.82,z-.06,.24,.40,1.67);
+    batch.box(SHADOWED_WOOD,x+cheek*.54,13.74,z-.79,.16,.21,.19);
+  }
+  batch.add(METAL,new THREE.CylinderGeometry(.076,.082,1.36,6).rotateZ(Math.PI*.5),x,13.82,z-.80);
+}
+
+function timberPurlin(batch, kind, start, end, width, depth){
+  const a=new THREE.Vector3(...start), b=new THREE.Vector3(...end);
+  const axis=b.clone().sub(a);
+  const geometry=new THREE.BoxGeometry(width,axis.length(),depth,1,8,1);
+  const turn=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),axis.normalize());
+  geometry.applyQuaternion(turn);
+  batch.add(kind,geometry,...a.lerp(b,.50).toArray());
+}
+
+function gateBeamRafters(environment, parent, side){
+  const z=strikeBeamDepth;
+  const crosspiece=new PalaceGeometry(true);
+  const bays=[];
+  // Three short roof members pitch up behind the crossbeam; the broad
+  // middle retains its full clear length for the two planted foreclaws.
+  for(const [bay,offset] of [3.94,5.27,6.62].entries()){
+    const x=side*offset;
+    const purlin=new THREE.Group();
+    purlin.name=side<0?`左檐第${bay+1}椽`:`右檐第${bay+1}椽`;
+    parent.add(purlin);
+    const member=new PalaceGeometry(true);
+    const heel=new THREE.Vector3(x,14.10,z+.43), ridge=new THREE.Vector3(x,15.61,z+4.29);
+    timberPurlin(member,TIMBER,heel.toArray(),ridge.toArray(),.37,.42);
+    timberPurlin(member,GATE_BEAM,[x,14.24,z+.13],[x,14.67,z+1.34],.42,.34);
+    member.commit(environment,purlin);
+    bays.push({root:purlin,side,bay,heel,ridge});
+  }
+  crosspiece.box(TIMBER,side*5.28,14.01,z+1.83,3.12,.36,.43);
+  crosspiece.commit(environment,parent);
+  return bays;
+}
+
+function movingGate(environment,gate,main){
+  const roof=new PalaceGeometry(true),plaque=new PalaceGeometry(true),pillars=new Map();
+  // Each entry cuts a continuous front course out of the roof shell. The
+  // depth changes by column so that no two detached sections share a seam.
+  const tiles=[
+    {side:-1,upper:false,start:15,steps:[1,2,3,3,3,4,5,5,3]},
+    {side:1,upper:false,start:37,steps:[4,5,5,3,3,5,4,4,5,5,4,3,2]},
+    {side:-1,upper:true,start:17,steps:[1,2,3,3,2,3,2,1]},
+    {side:-1,upper:true,ridge:true,start:21,steps:[14,15,16,16,17,17,16,16,15]},
+    {side:1,upper:true,ridge:true,start:30,steps:[15,15,17,17,16,16,15,14,14]},
+    {side:-1,upper:false,tear:'near-lower',start:18,heel:[4,4,5,5,6,6,6,7,8,8],steps:[8,10,12,13,13,14,14,13,12,10]},
+    {side:1,upper:true,tear:'far-upper',start:39,heel:[5,4,4,3,3,4,5,5,6,6],steps:[11,13,13,14,15,14,12,12,10,8]},
+  ].map(course=>({
+    ...course,end:course.start+course.steps.length,batch:new PalaceGeometry(true),origin:new THREE.Vector3(),
+  }));
+  const roofSpall={side:-1,upper:false,spall:true,start:11,end:15,steps:[5,8,9,7],
+    batch:new PalaceGeometry(true),origin:new THREE.Vector3()};
+  tiles.push(roofSpall);
+  const spallRafters=[-8,-6].map(index=>({index,batch:new PalaceGeometry(true),origin:new THREE.Vector3()}));
+  const pillarParts=[];
+  for(const side of [-1,1])for(const depth of [-1,1]){
+    const batch=new PalaceGeometry(true);
+    const fraction=portalPostFraction*side;
+    const bearing=depth<0;
+    pillars.set(`${fraction}:${depth}`,batch);
+    pillarParts.push({batch,side,depth,bearing,x:49*fraction,z:bearing?strikeBeamDepth:7*depth});
+  }
+  buildHall(main,{x:0,y:0,z:0,width:49,depth:17.5,height:11.9,tiers:2,
+    portal:true,detailed:true,moving:{roof,plaque,pillars,tiles,spallRafters}});
+
+  // The beam carries the load from the eave to the two door leaves.
+  roof.box(SHADOWED_WOOD,0,11.22,-7.18,12.68,.69,.87);
+  roof.box(METAL,0,11.42,-7.62,12.71,.09,.084);
+  const purlins=[];
+  const halves=[-1,1].map(side=>{
+    const group=new THREE.Group();
+    group.name=side<0?'南天门左重檐':'南天门右重檐';
+    gate.add(group);
+    purlins.push(...gateBeamRafters(environment,group,side));
+    return [side,group];
+  });
+  roof.commit(environment,gate,1,halves);
+  const addCourse=({side,upper,batch,origin,ridge,spall,tear})=>{
+    const root=new THREE.Group(),shell=new THREE.Group();
+    root.name=tear?'瓦脊内侧折断的斜瓦带':spall?'坠地的左檐瓦楔':ridge?'折落脊檩':upper?'上檐脱落瓦片':side<0?'左檐断瓦带':'右檐断瓦带';
+    root.position.copy(origin);
+    shell.position.copy(origin).multiplyScalar(-1);
+    root.add(shell);
+    gate.add(root);
+    batch.commit(environment,shell);
+    return {root,origin,side,upper,ridge,spall,tear};
+  };
+  const detachedCourses=tiles.filter(course=>!course.spall).map(addCourse);
+  const spall=[roofSpall,...spallRafters].map((course,index)=>({
+    ...addCourse({...course,side:-1,spall:true}),tile:index===0,
+  }));
+
+  const fascia=[-1,1].map(side=>{
+    const center=side*3.4;
+    const root=new THREE.Group(),batch=new PalaceGeometry(true),split=new PalaceGeometry(true);
+    const mesh=new THREE.Group();
+    const cut=new THREE.Group();
+    root.name=side<0?'檐梁左断口':'檐梁右断口';
+    root.position.set(center,14.14,strikeBeamDepth);
+    mesh.position.copy(root.position).multiplyScalar(-1);
+    root.add(mesh);
+    gate.add(root);
+    cut.name='新断木心';
+    cut.visible=false;
+    mesh.add(cut);
+    gateBeam(side,batch,split);
+    batch.commit(environment,mesh);
+    split.commit(environment,cut);
+    // Toe joint rests just above the crown, on its own side of the split.
+    const pawSeat=new THREE.Vector3(side*.94-center,14.58-14.14,side*.19);
+    const crown=mesh.children.find(child=>child.userData.gateBeamCrown);
+    return {root,side,center,cut,crown,pawSeat,pawWorld:new THREE.Vector3()};
+  });
+  const board=new THREE.Group();
+  const boardFace=new THREE.Group();
+  board.name='南天门匾额';
+  board.position.set(0,11.47,-8.16);
+  boardFace.position.copy(board.position).multiplyScalar(-1);
+  board.add(boardFace);
+  gate.add(board);
+  plaque.commit(environment,boardFace);
+
+  for(const part of pillarParts){
+    const pivot=new THREE.Group();
+    const meshGroup=new THREE.Group();
+    pivot.name='中门通柱';
+    pivot.position.set(part.x,.55,part.z);
+    meshGroup.position.copy(pivot.position).multiplyScalar(-1);
+    pivot.add(meshGroup);
+    gate.add(pivot);
+    part.batch.commit(environment,meshGroup);
+    part.pivot=pivot;
+    if(part.bearing){
+      const bracket=new THREE.Group(),joinery=new PalaceGeometry(true);
+      bracket.name='檐梁下承斗拱';
+      gateBeamBearing(joinery,part.x,part.z);
+      joinery.commit(environment,bracket);
+      meshGroup.add(bracket);
+      part.bracket=bracket;
+    }
+  }
+
+  const doors=[-1,1].map(side=>{
+    const root=new THREE.Group(),hinge=new THREE.Group();
+    root.name=side<0?'南天门左门扇':'南天门右门扇';
+    root.position.set(side*5.94,.20,-7.21);
+    root.add(hinge);
+    gate.add(root);
+    const wood=new PalaceGeometry(true),x=-side*2.91;
+    wood.box(WASHED_LACQUER,x,5.22,0,5.8,10.48,.42);
+    wood.box(TIMBER,x,5.22,-.25,5.25,9.93,.14);
+    for(let i=0;i<8;i++){
+      const u=x+(i-3.5)*.639;
+      wood.box(DOOR_LACQUER,u,5.22,-.34,.60,9.66,.12);
+      wood.box(WASHED_LACQUER,u,5.22,.31,.60,9.66,.12);
+    }
+    for(const z of [-.43,.38])for(const y of [.46,3.37,6.84,10.02]){
+      wood.box(TIMBER,x,y,z,5.55,.26,.12);
+    }
+    for(const xEdge of [x-2.75,x+2.75])wood.box(TIMBER,xEdge,5.21,-.435,.27,10.23,.11);
+    for(const y of [2.63,7.55,8.09,8.63])for(let col=0;col<6;col++){
+      wood.add(METAL,new THREE.SphereGeometry(.119,7,4).scale(1,1,.37),x+(col-2.5)*.76,y,-.46);
+    }
+    const ringX=-side*4.94;
+    const ring=new THREE.Group();
+    ring.name='门扇铜环';
+    ring.position.set(ringX,5.12,-.53);
+    hinge.add(ring);
+    const hardware=new PalaceGeometry(true);
+    hardware.add(METAL,new THREE.TorusGeometry(.32,.065,5,17),0,-.32,0);
+    hardware.commit(environment,ring);
+    wood.box(METAL,ringX,5.14,-.50,.43,.50,.13);
+    wood.commit(environment,hinge);
+    return {side,root,hinge,ring};
+  });
+  const latch=new THREE.Group();
+  latch.position.set(0,5.31,-7.88);
+  gate.add(latch);
+  const bronze=new PalaceGeometry(true);
+  bronze.box(SHADOWED_WOOD,0,0,0,3.23,.32,.29);
+  bronze.box(METAL,0,0,-.18,1.27,.43,.19);
+  bronze.box(METAL,0,-.38,-.32,.73,.79,.17);
+  bronze.box(METAL,0,-.37,-.43,.45,.53,.09);
+  bronze.commit(environment,latch);
+  const seal=vermilionTag(environment,latch,.18,-.13,-.54,.64,.08);
+  seal.name='门闩朱印';
+  return {halves,purlins,fascia,board,boardFace,pillars:pillarParts,doors,latch,tiles:detachedCourses,spall};
+}
+
+function distantCourtDepth(environment, gate) {
+  const middle = new PalaceGeometry();
+  // This hill carries a single open aisle past the lower walk. Its roof
+  // turns the eye along the approach while the supports stay low in cloud.
+  const aisle = terrace(middle,-21.8,3.95,38.0,11.8,21.6,2.55,2.45);
+  pedestalCliff(middle,-22.15,38.6,6.7,10.8,17.2,833,aisle,2.6);
+  openSideGallery(middle,-21.8,3.95,38.6);
+  railing(middle,[-26.95,4.01,28.82],[-16.62,4.01,28.82],1.62);
+  middle.commit(environment,gate,.46);
+
+  const far = new PalaceGeometry();
+  // Shift the transverse roof past the near court's right shoulder. Keep
+  // the far roof distinct from the center skyline under the damaged gate.
+  const shelf = terrace(far,24.25,12.9,68.3,30.1,22.1,3.35,2.2);
+  pedestalCliff(far,25.15,69.4,14.85,10.8,24.6,916,shelf,4.7);
+  buildHall(far,{x:24.25,y:12.9,z:69.4,width:24.8,depth:12.4,height:6.85,tiers:1,screened:true});
+  railing(far,[11.4,12.96,57.87],[37.1,12.96,57.87],1.55);
+  cliffRidge(far,42.7,-8.6,86.7,12.5,10.2,24.6,913);
+  far.commit(environment,gate,.33);
+}
+
 export function createHeaven(environment, root) {
   const gate = new THREE.Group();
   gate.name = '九重天阙 · 中门';
@@ -968,21 +1594,50 @@ export function createHeaven(environment, root) {
   pedestalCliff(main,0,4,28,13.2,26.5,193,gateFoot,3.6);
   const landingFoot=terrace(main,0,-11,-31.7,27.0,5.2,2.7,undefined,'landing');
   pedestalCliff(main,-.75,-30.7,13.9,4.1,10.8,217,landingFoot,2.4);
-  stairFlight(main, -31.8, -25.9, -11, -7.65, 21.2, 14);
+  const lowestStairHeight=stairFlight(main, -31.8, -25.9, -11, -7.65, 21.2, 14);
   const firstStairFoot=terrace(main,0,-7.65,-24.7,22.25,2.52,3.4);
   pedestalCliff(main,0,-24.7,12.1,4.2,13,233,firstStairFoot);
-  stairFlight(main, -23.5, -18.1, -7.65, -3.75, 22.1, 15);
+  const middleStairHeight=stairFlight(main, -23.5, -18.1, -7.65, -3.75, 22.1, 15);
   const secondStairFoot=terrace(main,0,-3.75,-16.9,23.15,2.5,3.6);
   pedestalCliff(main,0,-16.9,12.7,4.1,17,239,secondStairFoot);
-  stairFlight(main, -15.7, -11.9, -3.75, 0, 23, 14);
+  gate.userData.upperStairHeight = stairFlight(main, -15.7, -11.9, -3.75, 0, 23, 14);
+  const {upperStairHeight}=gate.userData;
+  gate.userData.lockStairHeight=(x,z)=>{
+    let height=-Infinity;
+    for(const sample of [upperStairHeight,middleStairHeight,lowestStairHeight]){
+      if(sample.contains(x,z))height=Math.max(height,sample(x,z));
+    }
+    for(const shelf of [gateFoot,secondStairFoot,firstStairFoot,landingFoot]){
+      height=Math.max(height,terraceTopAt(shelf,x,z));
+    }
+    return height;
+  };
+  // The roof can touch only the stone that exists beneath it. Read the
+  // same chamfered cap polygon the terrace mesh uses.
+  const stone=gateFoot.capPositions;
+  gate.userData.roofStoneHeight=(x,z)=>{
+    if(Math.abs(x)<24.20&&z>=-8.54&&z<12.60)return stone[1];
+    if(Math.abs(x)>25.19||z<-12.13||z>13.79){
+      return Math.abs(x)<11.5&&z>=-15.7&&z<-11.9?gate.userData.upperStairHeight(x,z):-Infinity;
+    }
+    let inside=false;
+    for(let i=3,j=stone.length-3;i<stone.length;j=i,i+=3){
+      const zi=stone[i+2],zj=stone[j+2];
+      if((zi>z)!==(zj>z)&&x<(stone[j]-stone[i])*(z-zi)/(zj-zi)+stone[i])inside=!inside;
+    }
+    if(inside)return stone[1];
+    if(Math.abs(x)<11.5&&z>=-15.7&&z<-11.9)return gate.userData.upperStairHeight(x,z);
+    return -Infinity;
+  };
   for (const direction of [-1, 1]) {
-    railing(main,[direction*11.7,.04,-11.9],[direction*24.65,.04,-11.9],1.82);
+    const apronZ=x=>-11.9+gateApronInset(direction*x);
+    railing(main,[direction*11.7,.04,apronZ(11.7)],[direction*17.85,.04,apronZ(17.85)],1.82);
+    railing(main,[direction*17.85,.04,apronZ(17.85)],[direction*24.65,.04,apronZ(24.65)],1.82);
     if(direction>0){
-      railing(main,[24.65,.04,-11.9],[24.65,.04,-10.72],1.8);
       railing(main,[24.65,.04,-7.85],[24.65,.04,13.3],1.82);
       galleryApproach(main);
     }else{
-      railing(main,[-24.65,.04,-11.9],[-24.65,.04,-2.2],1.82);
+      railing(main,[-24.65,.04,apronZ(24.65)],[-24.65,.04,-2.2],1.82);
       railing(main,[-24.65,.04,1.2],[-24.65,.04,13.3],1.82);
       sideSteps(main,direction);
     }
@@ -992,8 +1647,8 @@ export function createHeaven(environment, root) {
     }
     batchEntranceLantern(main, direction * 12.6, 0, -10.3);
   }
-  buildHall(main, { x: 0, y: 0, z: 0, width: 49, depth: 17.5, height: 11.9, tiers: 2, portal: true, detailed: true });
-  main.commit(environment, gate);
+  const moving=movingGate(environment,gate,main);
+  main.commit(environment, gate, 1, null, 'throne');
 
   const foreground=new PalaceGeometry();
   cloudFoot(foreground,26,-14.1,-41.9,13.2,7.0,7.8,53);
@@ -1023,7 +1678,14 @@ export function createHeaven(environment, root) {
   inner.position.z = 27;
   gate.add(inner);
   const court = new PalaceGeometry();
-  terrace(court, 0, 1, -11.5, 30, 10, 2);
+  // Bring the stone beneath the marked forepaw seats. Keep the rear edge
+  // at the staircase and join the new lip to the same shallow court.
+  const courtApron=terrace(court, 0, 1, -11.87, 30, 10.74, 2);
+  gate.userData.courtStoneHeight=(x,z)=>terraceTopAt(courtApron,x,z-inner.position.z);
+  for(const x of [-2.28,2.44]){
+    court.curve(CARVING,[[x,1.024,-17.1],[x+.05,1.024,-14.8],
+      [x-.04,1.024,-11.7],[x+.02,1.024,-8.5]],.026,4);
+  }
   stairFlight(court, -7.0, -.5, 1, 4.2, 20.6, 18, false);
   const innerFoot=terrace(court,0,4.2,12.2,38,26,3.3);
   pedestalCliff(court,0,10.9,21,15.3,20,508,innerFoot);
@@ -1032,14 +1694,22 @@ export function createHeaven(environment, root) {
     railing(court, [direction * 14.6, 1.05, -16.3], [direction * 14.6, 1.05, -6.6], 1.85);
     railing(court, [direction * 10.7, 4.22, -.7], [direction * 18.7, 4.22, -.7], 1.85);
   }
-  court.commit(environment,inner,.53);
+  court.commit(environment,inner,.53,null,'court');
 
   const walks = new THREE.Group();
   walks.name = '通往内庭的两翼回廊';
   gate.add(walks);
   const walkBatch = new PalaceGeometry();
-  for (const direction of [-1, 1]) coveredWalk(walkBatch, direction);
+  const walkRoofs=[-1,1].map(direction=>coveredWalk(walkBatch,direction));
   walkBatch.commit(environment,walks,.61);
+  distantCourtDepth(environment,gate);
+  gate.userData.finaleParts=moving;
+  gate.userData.finaleFactory=()=>{
+    const effects=buildHeavenFinale(gate);
+    mountGateText(moving.boardFace);
+    gate.userData.wetCourtRoof=mountCourtRoofRain(walks,walkRoofs);
+    return effects;
+  };
   return gate;
 }
 

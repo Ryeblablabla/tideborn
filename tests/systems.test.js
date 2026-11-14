@@ -1,26 +1,315 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Game, validateSave } from '../src/model.js';
+import { Game, STAGES, validateSave } from '../src/model.js';
 import { DENSITY, distance3 } from '../src/simulation.js';
+import { ENEMY_CAPACITY } from '../src/enemy-grid.js';
 import { MotionReader, sampleSpine, insidePolygon } from '../src/motion.js';
-import { attackOrigin, fireTechnique, updateWeaponCombat } from '../src/weapon-combat.js';
+import { attackOrigin, fireTechnique, previewAttackIntent, updateWeaponCombat } from '../src/weapon-combat.js';
+import { techniqueStats } from '../src/cultivation.js';
+import { openCascadeFollowThrough, sendGaleSpore, updateCascade } from '../src/cascades.js';
 import { WeaponStrokes } from '../src/ink/weapon-strokes.js';
 import { Scene } from 'three';
-import { createMarketTrial } from '../src/market-trial.js';
-const tick=(g,n,input={})=>{for(let i=0;i<n*60;i++){if(g.status==='upgrade')g.choose(0);g.step(1/60,input);g.events=[];}};
-test('damage physically shortens the body and recovered tissue cannot farm XP',()=>{
- const g=new Game({seed:3}),before=g.p.body,hp=g.p.hp;g.hurt(40);assert.ok(g.p.body<before);assert.ok(g.p.hp<hp);const shed=g.food.filter(f=>f.shed);assert.ok(shed.length);const remaining=g.p.mass,xp=g.xp;for(const f of shed)g.eat(f);assert.ok(g.p.mass>remaining);assert.ok(g.p.mass<12.5);assert.equal(g.xp,xp);assert.equal(g.eaten,0);
+const tick=(g,n,input={})=>{for(let i=0;i<n*60;i++){g.step(1/60,input);g.events=[];}};
+test('an overlapping elemental clear saves one discharge for a separate living group',()=>{
+  const game=new Game({seed:7,starter:'bubble'});
+  game.stage=2;
+  Object.assign(game.cultivation,{cascade:'poison',cascadeRank:2});
+  game.activeDragonArt={id:101,kind:'abyss',stage:2,startedAt:0,radius:16,height:4,
+    center:{x:0,y:.7,z:0},hitTargets:new Set()};
+  const first=Array.from({length:5},(_,i)=>game.spawnEnemy(0,-6+i*.25,5,.7));
+  const wing=Array.from({length:5},(_,i)=>game.spawnEnemy(0,15.0+i*.25,5,.7));
+  game.time=.4;
+  game.damage(first[0],10000,'poison',game.p);
+  game.damage(first[1],10000,'poison',game.p);
+  assert.equal(game.events.filter(e=>e.type==='cascadeReserve').length,1);
+  const announced=game.events.find(e=>e.type==='cascadeHandoffAim');
+  assert.equal(announced.stage,2);
+  assert.deepEqual(new Set(announced.receiverIds),new Set(wing.map(enemy=>enemy.id)));
+  assert.equal(announced.retargeted,false);
+  assert.equal(game.activeCascade,undefined);
+  game.time=1.3;
+  updateCascade(game,0);
+  assert.equal(game.activeCascade,undefined);
+  for(const enemy of first)game.activeDragonArt.hitTargets.add(enemy.id);
+  game.activeDragonArt=null;
+  updateCascade(game,0);
+  game.time=1.6;
+  updateCascade(game,0);
+  assert.deepEqual(new Set(game.activeCascade.handoff.receiverIds),new Set(wing.map(enemy=>enemy.id)));
+  assert.equal(game.activeCascade.handoff.aimId,announced.id);
+  assert.deepEqual(game.activeCascade.handoff.to,announced.to);
+  assert.ok(game.activeCascade.handoff.firstPulseAt>=1.6+.36);
+  assert.equal(game.events.filter(e=>e.type==='cascadeStart').length,1);
+  game.time=2.2;
+  updateCascade(game,0);
+  assert.ok(game.events.filter(e=>e.type==='cascadeHit').some(e=>wing.some(enemy=>e.targetId===enemy.id)));
+});
+test('a lost handoff group is replaced explicitly before the new group receives poison',()=>{
+  const game=new Game({seed:7,starter:'bubble'});
+  game.stage=2;
+  Object.assign(game.cultivation,{cascade:'poison',cascadeRank:2});
+  const art=game.activeDragonArt={id:105,kind:'abyss',stage:2,startedAt:0,radius:12,height:4,
+    center:{x:0,y:.7,z:0},hitTargets:new Set()};
+  const formation=(x,z)=>Array.from({length:5},(_,i)=>game.spawnEnemy(0,x+i*.25,z,.7));
+  const inner=formation(-6,5), first=formation(14,5);
+  const behind=formation(1,-19);
+  game.time=.4;
+  game.damage(inner[0],10000,'poison',game.p);
+  const initial=game.events.find(e=>e.type==='cascadeHandoffAim');
+  assert.deepEqual(new Set(initial.receiverIds),new Set(first.map(enemy=>enemy.id)));
+  assert.equal(game.activeCascade,undefined);
+  first.forEach(enemy=>{enemy.hp=0;});
+  const second=formation(-14,7);
+  game.time=.6;
+  game.enemyGrid.invalidate();
+  updateCascade(game,0);
+  game.time=.9;
+  updateCascade(game,0);
+  const cancellation=game.events.find(e=>e.type==='cascadeHandoffCancel');
+  const replacement=game.events.filter(e=>e.type==='cascadeHandoffAim').at(-1);
+  assert.equal(cancellation.reason,'group-lost');
+  assert.equal(replacement.id,initial.id);
+  assert.equal(replacement.revision,2);
+  assert.equal(replacement.retargeted,true);
+  assert.deepEqual(replacement.previousTo,initial.to);
+  assert.deepEqual(new Set(replacement.receiverIds),new Set(second.map(enemy=>enemy.id)));
+  for (const enemy of inner) art.hitTargets.add(enemy.id);
+  game.activeDragonArt=null;
+  game.time=1.2;
+  updateCascade(game,0);
+  assert.equal(game.activeCascade,undefined);
+  game.time=1.5;
+  updateCascade(game,0);
+  const {handoff}=game.activeCascade;
+  assert.equal(handoff.aimId,replacement.id);
+  assert.equal(handoff.revision,replacement.revision);
+  assert.deepEqual(handoff.to,replacement.to);
+  game.time=handoff.firstPulseAt-.001;
+  updateCascade(game,0);
+  assert.ok(!game.events.some(e=>e.type==='cascadeHit'));
+  game.time=handoff.firstPulseAt+.001;
+  updateCascade(game,0);
+  const hits=game.events.filter(e=>e.type==='cascadeHit');
+  assert.ok(hits.length && hits.every(e=>second.some(enemy=>enemy.id===e.targetId)));
+  assert.ok(behind.every(enemy=>enemy.hp===enemy.maxHp));
+});
+test('a strong dragon-art clear can advance one compatible discharge onto a separate live group',()=>{
+  const game = new Game({seed:7,starter:'bubble'});
+  game.stage = 2;
+  Object.assign(game.cultivation,{cascade:'water',cascadeRank:2});
+  game.time = 8;
+  game.nextDragonArtAt = 13;
+  game.nextCascadeAt = 12;
+  game.lastCascadeStartedAt = 3;
+  game.cascadeFollowed = false;
+  const source = {x:0,y:.7,z:3};
+  const art = {id:110,kind:'stone',rank:2,stage:2,killCount:12,lastBreak:source,hitTargets:new Set()};
+  const group = Array.from({length:5},(_,index)=>game.spawnEnemy(0,2+index*.36,12,.7));
+  const oldTarget = game.spawnEnemy(0,2.3,12,.7);
+  oldTarget.hp = oldTarget.maxHp = 10000;
+  art.hitTargets.add(oldTarget.id);
+  const killWith = element=>game.damage(game.spawnEnemy(0,2.3,12,.7),1e4,element,game.p);
+  openCascadeFollowThrough(game,art);
+  killWith('bubble');
+  const aim = game.events.find(event=>event.type==='cascadeHandoffAim'&&event.afterClear);
+  assert.deepEqual(new Set(aim.receiverIds),new Set(group.map(enemy=>enemy.id)));
+  assert.equal(aim.artId,art.id);
+  assert.equal(game.activeCascade,undefined);
+  updateCascade(game,0);
+  game.time = 8.31;
+  updateCascade(game,0);
+  const {handoff} = game.activeCascade;
+  assert.equal(handoff.afterClear,true);
+  assert.equal(game.nextDragonArtAt,13);
+  assert.equal(game.nextCascadeAt,12);
+  assert.equal(game.cascadeAfterClear,null);
+  game.time = handoff.firstPulseAt+.01;
+  updateCascade(game,0);
+  assert.ok(game.events.some(event=>event.type==='cascadeHit'&&event.killed&&handoff.receiverIds.includes(event.targetId)));
+  assert.equal(oldTarget.hp,10000);
+  game.time = 10.3;
+  updateCascade(game,0);
+  openCascadeFollowThrough(game,{...art,id:111});
+  killWith('bubble');
+  assert.equal(game.events.filter(event=>event.type==='cascadeReserve'&&event.afterClear).length,1);
+});
+
+function runDoctrine(route,doctrine,arrange) {
+  const game=new Game({seed:7,starter:'bubble'});
+  game.stage=3;
+  Object.assign(game.p,{x:0,y:10,z:0,angle:0});
+  Object.assign(game.cultivation,{cascade:route,cascadeRank:3,cascadeDoctrine:doctrine});
+  const foe=(x,z,y=10,wet=true)=>{
+    const enemy=game.spawnEnemy(10,x,z,y);
+    enemy.y=y;
+    enemy.wet=wet?4:0;
+    return enemy;
+  };
+  const seed=foe(0,6);
+  const formations=arrange(foe);
+  const source={water:'bubble',thunder:'lightning',fire:'fire',poison:'mist',wind:'tail'}[route];
+  game.damage(seed,10000,source,game.p);
+  for(let i=1;i<=160;i++){
+    game.time=i/60;
+    formations.move?.(game.time);
+    updateCascade(game,1/60);
+  }
+  const hits=game.events.filter(event=>event.type==='cascadeHit');
+  const pulses=game.events.filter(event=>event.type==='cascadePulse');
+  return {formations,hits,pulses};
+}
+
+test('water doctrine chooses a two-sided wet split or a longer narrow lane',()=>{
+  const arrange=foe=>({near:[foe(0,3),foe(.6,4),foe(.2,5),foe(-.6,5)],
+    wings:[foe(-9,12),foe(9,12)],far:[foe(0,23)]});
+  const fan=runDoctrine('water','fan',arrange);
+  const lane=runDoctrine('water','lane',arrange);
+  const hasHit=({formations,hits},name)=>formations[name].every(foe=>hits.some(hit=>hit.targetId===foe.id));
+  assert.deepEqual(fan.pulses.filter(event=>event.detail==='fan-crest'&&event.preparing).map(event=>event.leg),[-1,1]);
+  assert.ok(hasHit(fan,'wings'));
+  assert.ok(!hasHit(fan,'far'));
+  assert.ok(hasHit(lane,'far'));
+  assert.ok(!hasHit(lane,'wings'));
+  assert.ok(lane.pulses.every(event=>event.detail==='lane-crest'));
+});
+
+test('thunder doctrine climbs to wet targets or sends two flat branches',()=>{
+  const arrange=foe=>({near:[foe(0,6),foe(.7,6),foe(-.6,6),foe(0,7)],
+    high:[foe(0,11,16.5)],wings:[foe(-9,12.8),foe(9,12.8)],dry:[foe(1,11,16.5,false)]});
+  const rise=runDoctrine('thunder','rise',arrange);
+  const fork=runDoctrine('thunder','fork',arrange);
+  const contact=(run, detail, name)=>run.formations[name].every(foe=>run.hits.some(hit=>hit.detail===detail&&hit.targetId===foe.id));
+  assert.ok(contact(rise,'rise-bolt','high'));
+  assert.ok(!contact(rise,'rise-bolt','dry'));
+  assert.ok(contact(fork,'fork-bolt','wings'));
+  assert.ok(!contact(fork,'fork-bolt','high'));
+  for(const run of [rise,fork]) {
+    assert.equal(new Set(run.hits.map(hit=>hit.targetId)).size,run.hits.length);
+    for(const contact of run.hits.filter(hit=>hit.leg)){
+      assert.ok(run.pulses.some(event=>event.preparing&&event.leg===contact.leg&&event.receiverIds.includes(contact.targetId)));
+    }
+  }
+});
+
+test('a second fire transfer can only carry a kill from its first receiving group',()=>{
+  const arrange=foe=>({kindling:[foe(-1,5),foe(1,5),foe(-2,6),foe(2,6)],
+    first:[foe(0,18),foe(.45,18),foe(-.45,18)],
+    second:[foe(0,27),foe(1,27),foe(-1,27)]});
+  const relay=runDoctrine('fire','cinder',arrange);
+  const rings=runDoctrine('fire','crown',arrange);
+  const launches=relay.pulses.filter(event=>event.detail==='cinder-path'&&event.preparing);
+  assert.equal(launches.length,2);
+  const landing=relay.hits.filter(hit=>hit.detail==='cinder-path'&&hit.leg===1&&hit.killed);
+  assert.ok(landing.some(hit=>hit.targetId===launches[1].sources[0].targetId));
+  assert.ok(relay.formations.second.every(enemy=>relay.hits.some(hit=>hit.targetId===enemy.id&&hit.leg===2)));
+  assert.deepEqual(rings.pulses.filter(event=>event.detail==='crown-ring'&&!event.preparing).map(event=>event.radius),[5.3,9.2,13.2]);
+});
+
+test('a poison knot moves with a surviving host and bursts at the new live group',()=>{
+  const arrange=foe=>{
+    const carriers=Array.from({length:4},(_,index)=>foe(-.6+index*.36,6));
+    const others=Array.from({length:3},(_,index)=>foe(-.4+index*.36,19));
+    return {carriers,others,move:time=>{
+      if(time>.46)for(const carrier of carriers)carrier.z=6+Math.min(9,(time-.46)*18);
+    }};
+  };
+  const {formations,pulses,hits}=runDoctrine('poison','host',arrange);
+  const carry=pulses.find(event=>event.detail==='host-knot'&&!event.preparing&&event.receiverIds.length>=2);
+  assert.ok(carry);
+  assert.ok(carry.to.z-carry.from.z>5);
+  assert.ok(formations.carriers.some(enemy=>enemy.id===carry.carrierId));
+  assert.ok(formations.others.every(enemy=>hits.some(hit=>hit.targetId===enemy.id&&hit.detail==='host-knot'&&hit.killed)));
+});
+
+test('wind can implode around a stationary eye or take a moving cut through a separate cohort',()=>{
+  const arrange=foe=>({near:[foe(0,3),foe(.6,4),foe(-.6,4),foe(0,7)],
+    far:[foe(0,19),foe(.8,20),foe(-.6,20)],outer:[foe(2,33),foe(1,34),foe(3,34)]});
+  const gyre=runDoctrine('wind','gyre',arrange);
+  const gale=runDoctrine('wind','gale',arrange);
+  const gathering=gyre.pulses.filter(event=>event.detail==='gyre-core');
+  assert.equal(gathering.length,2);
+  assert.ok(gathering[0].preparing&&gathering[1].receiverIds.length>=4);
+  assert.deepEqual(gathering.map(event=>[event.x,event.y,event.z]),[[0,10,6],[0,10,6]]);
+  const storm=gale.pulses.filter(event=>event.detail==='gale-run'&&!event.preparing);
+  assert.equal(storm.length,2);
+  assert.deepEqual(storm[1].from,storm[0].to);
+  assert.ok(storm[1].to.z>30);
+  assert.ok(gale.formations.outer.every(enemy=>gale.hits.some(hit=>hit.targetId===enemy.id&&hit.leg===2)));
+  assert.ok(gyre.formations.outer.every(enemy=>gyre.hits.every(hit=>hit.targetId!==enemy.id)));
+});
+
+test('a physically carried poison seed can sweep both free flanks when upgraded',()=>{
+  for(const tier of [1,2]) {
+    const game=new Game({seed:7,starter:'bubble'});
+    game.stage=2;
+    Object.assign(game.cultivation,{cascade:'wind',cascadeRank:3,cascadeDoctrine:'gale'});
+    const wing=side=>[-1,0,1].map((offset)=>game.spawnEnemy(0,side*(11+offset),8,.7));
+    const left=wing(-1), right=wing(1), host=game.spawnEnemy(0,0,7,.7);
+    const windHit=game.spawnEnemy(0,12,8,.7);
+    const center={x:0,y:.7,z:5};
+    const cascade={id:999,kind:'wind',rank:3,doctrine:'gale',stage:2,center,direction:{x:0,z:1},started:0,
+      duration:1.6,targets:new Set([windHit.id]),hitLimit:40,hits:0,kills:0,pending:[],power:1,clearedRadius:0,
+      windGather:{carried:new Set([host.id])}};
+    const seed={id:1000,host,tier,radius:3,galeCarry:{cascade,from:center,travel:2,path:[center],pulledAt:.5,direction:{x:0,z:1}}};
+    game.time=.5;
+    game.activeCascade=cascade;
+    sendGaleSpore(game,seed,{id:1001});
+    const starts=game.events.filter(event=>event.detail==='gale-spore-front'&&event.preparing);
+    assert.equal(starts.length,tier);
+    assert.ok([...left,...right].every(enemy=>enemy.poison===0));
+    game.time=1.5;
+    updateCascade(game,1/60);
+    const hits=game.events.filter(event=>event.detail==='gale-spore-hit');
+    assert.equal(hits.length,tier*3);
+    assert.equal(new Set(hits.map(event=>event.targetId)).size,hits.length);
+    assert.ok(hits.every(hit=>starts.some(start=>start.leg===hit.leg&&start.receiverIds.includes(hit.targetId))));
+    assert.equal(windHit.poison,0);
+  }
+});
+
+test('a mature gale seed can wait for a genuinely later opposite group once',()=>{
+  for(const arrives of [true,false]) {
+    const game=new Game({seed:7,starter:'bubble'});
+    game.stage=2;
+    Object.assign(game.cultivation,{cascade:'wind',cascadeRank:3,cascadeDoctrine:'gale'});
+    const wing=side=>[-1,0,1].map(offset=>game.spawnEnemy(0,side*(11+offset),8,.7));
+    const first=wing(-1),host=game.spawnEnemy(0,0,7,.7);
+    const center={x:0,y:.7,z:5};
+    const cascade={id:999,kind:'wind',rank:3,doctrine:'gale',stage:2,center,direction:{x:0,z:1},started:0,duration:1.6,
+      targets:new Set(),hitLimit:40,hits:0,kills:0,pending:[],power:1,clearedRadius:0,windGather:{carried:new Set([host.id])}};
+    const seed={id:1000,host,tier:2,radius:3,galeCarry:{cascade,from:center,travel:2,path:[center],pulledAt:.5,direction:{x:0,z:1}}};
+    game.time=.5;
+    game.activeCascade=cascade;
+    sendGaleSpore(game,seed,{id:1001});
+    assert.ok(game.galeSporeHold);
+    assert.equal(game.events.filter(event=>event.detail==='gale-spore-front'&&event.preparing).length,1);
+    game.time=1.35;
+    updateCascade(game,1/60);
+    const second=arrives?wing(1):[];
+    game.time=1.70;
+    updateCascade(game,1/60);
+    game.time=2.65;
+    updateCascade(game,1/60);
+    const hits=game.events.filter(event=>event.detail==='gale-spore-hit');
+    assert.deepEqual(hits.filter(event=>event.leg===3).map(hit=>hit.targetId).sort(),first.map(enemy=>enemy.id).sort());
+    assert.deepEqual(hits.filter(event=>event.leg===4).map(hit=>hit.targetId).sort(),second.map(enemy=>enemy.id).sort());
+    assert.equal(game.galeSporeHold,null);
+  }
+});
+test('damage physically shortens the body and recovered tissue does not grant essence',()=>{
+ const g=new Game({seed:3}),before=g.p.body,hp=g.p.hp;g.hurt(40);assert.ok(g.p.body<before);assert.ok(g.p.hp<hp);const shed=g.food.filter(f=>f.shed);assert.ok(shed.length);const remaining=g.p.mass,essence=g.essence;for(const f of shed)g.eat(f);assert.ok(g.p.mass>remaining);assert.ok(g.p.mass<12.5);assert.equal(g.essence,essence);assert.equal(g.eaten,0);
 });
 test('condensation shortens a grown body and retains organs and damage strength',()=>{
- const g=new Game();g.gainMass(20);g.buffs.fire=3;const n=g.p.body,hp=g.p.hp,damage=g.stats().damage;g.evolve();assert.ok(g.p.body<n);assert.ok(g.p.density>1);assert.ok(g.p.hp>hp);assert.equal(g.buffs.fire,3);assert.ok(g.stats().damage>damage);assert.ok(g.metrics.condensed);
+ const g=new Game();g.gainMass(20);g.buffs.fire=3;const n=g.p.body,hp=g.p.hp,damage=g.stats().damage;
+ g.evolve();assert.equal(g.form,2);assert.ok(g.p.body<n);assert.ok(g.p.density>1);assert.ok(g.p.hp>hp);assert.equal(g.buffs.fire,3);assert.ok(g.stats().damage>damage);assert.equal(g.metrics.condensed,1);
 });
-test('overflow growth yields bounded material for the market without automatic damage growth',()=>{
-  const g=new Game(), before=g.cultivation.materials;
+test('overflow growth does not increase body mass or damage beyond the cap',()=>{
+  const g=new Game();
   g.gainMass(100);
-  assert.ok(g.reserve>0);assert.equal(g.p.mass,g.stats().maxMass);
+  assert.equal(g.p.mass,g.stats().maxMass);
   const damage=g.stats().damage;
   g.gainMass(100);
-  assert.equal(g.cultivation.materials,before+6);
+  assert.equal(g.p.mass,g.stats().maxMass);
   assert.equal(g.stats().damage,damage);
 });
 test('staying still and tiny input jitter never casts a pose',()=>{const g=new Game();g.food=[];g.foodCD=100;g.spawnCD=100;for(let i=0;i<400;i++)g.step(1/60,{x:i%2?.02:-.02});assert.equal(g.metrics.wind+g.metrics.serpent+g.metrics.rings,0);});
@@ -45,7 +334,13 @@ test('fire and water produce steam, which lightning turns into an energetic thun
  const g=new Game();g.addZone('rain',{x:0,y:.7,z:0,radius:3});g.addZone('fire',{x:0,y:.7,z:0,radius:3});g.updateFields(.05);const cloud=g.zones.find(z=>z.kind==='steam');assert.ok(cloud);const e=g.spawnEnemy(0,1,0);e.hp=10000;e.wet=5;g.lightning(e,2);assert.equal(cloud.kind,'thunder');assert.ok(cloud.energy>0);assert.ok(g.metrics.reactions>=2);
 });
 test('element fields and enemies stay bounded during chain reactions',()=>{
- const g=new Game();for(let i=0;i<400;i++){g.addZone(i%2?'fire':'steam',{x:i%30*2,y:.7,z:Math.floor(i/30)*2,radius:2});g.spawnEnemy(0,i%15,Math.floor(i/15));}assert.ok(g.zones.length<=28);assert.ok(g.enemies.length<=200);for(let i=0;i<100;i++)g.updateFields(.05);assert.ok(g.zones.length<=28);
+ const g=new Game();
+ for(let i=0;i<400;i++)g.addZone(i%2?'fire':'steam',{x:i%30*2,y:.7,z:Math.floor(i/30)*2,radius:2});
+ for(let i=0;i<ENEMY_CAPACITY+1;i++)g.spawnEnemy(0,i%15,Math.floor(i/15));
+ assert.ok(g.zones.length<=28);
+ assert.equal(g.enemies.length,ENEMY_CAPACITY);
+ for(let i=0;i<100;i++)g.updateFields(.05);
+ assert.ok(g.zones.length<=28);
 });
 test('airborne altitude changes physics, targeting and projectile collision',()=>{
  const g=new Game();g.stage=3;g.p.mass=20*DENSITY[3];g.syncBody();g.p.y=8;g.p.altitude=8;g.spawnCD=100;g.food=[];g.foodCD=100;const high=g.spawnEnemy(0,0,4,18);g.attackCD=0;g.shoot();assert.ok(g.shots[0].vy>0);const hp=g.p.hp;g.hazards.push({id:999,x:g.p.x,y:18,z:g.p.z,vx:0,vy:0,vz:0,life:1});g.step(.05);assert.equal(g.p.hp,hp);const y=g.p.y;tick(g,1,{lift:1});assert.ok(g.p.y>y);assert.ok(distance3(g.p,high)>0);
@@ -58,7 +353,7 @@ test('research unlocks echo formations and conductive remnants',()=>{
  const e=g.spawnEnemy(0,1,0);e.hp=1;e.wet=4;g.lightning(e,2);assert.ok(g.zones.some(z=>z.kind==='thunder'&&z.energy>0));
 });
 test('the sea takeoff stays low and the mountain still spawns airborne food',()=>{const g=new Game();g.evolve();g.evolve();assert.equal(g.stage,2);tick(g,3);assert.ok(g.p.y<4.3);g.evolve();assert.ok(g.food.length>0&&g.food.every(f=>f.y>=7));tick(g,3);assert.ok(g.p.y>7);});
-test('water chapters only create collectible food from a kill',()=>{
+test('water chapters absorb kills once, even beyond pickup range',()=>{
   const game=new Game({seed:21});
   game.spawnCD=game.hordeCD=Infinity;
   for(let stage=0;stage<3;stage++){
@@ -67,37 +362,41 @@ test('water chapters only create collectible food from a kill',()=>{
     assert.equal(game.spawnFood(),null);
     game.step(.32);
     assert.equal(game.food.length,0);
-    const enemy=game.spawnEnemy(0,game.p.x+1,game.p.z,game.p.y);
+    const enemy=game.spawnEnemy(0,game.p.x+12,game.p.z,game.p.y);
+    const mass=game.p.mass,eaten=game.eaten;
     game.damage(enemy,enemy.hp/2);
-    assert.equal(game.food.length,0);
+    assert.equal(game.eaten,eaten);
     game.damage(enemy,enemy.hp);
     game.damage(enemy,1);
-    assert.equal(game.food.length,1);
-    const [drop]=game.food;
-    assert.ok(drop.battleLoot&&!drop.ambient&&drop.life<=38);
-    assert.deepEqual([drop.x,drop.y,drop.z],[enemy.x,enemy.y,enemy.z]);
-    const mass=game.p.mass;
-    const eaten=game.eaten;
-    for(let i=0;i<20&&game.eaten===eaten;i++)game.step(1/60);
     assert.equal(game.eaten,eaten+1);
-    assert.ok(game.p.mass>mass&&game.food.length===0);
+    assert.equal(game.food.length,0);
+    assert.ok(game.p.mass>mass&&game.essence>0);
+    const feedback=game.events.filter(event=>event.type==='absorb'&&event.stage===stage);
+    assert.equal(feedback.length,1);
+    assert.equal(feedback[0].essence,game.essence);
+    assert.ok(feedback[0].growth>0);
     game.evolve();
   }
   assert.ok(game.food.some(item=>item.ambient));
 });
-test('water battle drops expire without bringing back ambient food',()=>{
+test('ordinary kills alone can summon the mountain boss',()=>{
   const game=new Game({seed:21});
-  game.evolve();game.evolve();
-  const enemy=game.spawnEnemy(9,6,11,1);
-  game.damage(enemy,enemy.hp+1);
-  game.refillFood();
-  assert.equal(game.food.length,1);
-  const expired=game.food[0];
-  expired.life=.02;
-  game.step(.05);
-  assert.ok(!game.food.includes(expired));
+  game.stage=3;
+  game.syncBody();
+  game.spawnCD=game.hordeCD=game.foodCD=Infinity;
+  for(let i=0;i<240&&game.essence<STAGES[3].need;i++){
+    const enemy=game.spawnEnemy(10,12,11,10);
+    game.damage(enemy,enemy.hp+1);
+    game.enemies.pop();
+  }
+  assert.equal(game.food.length,0);
+  assert.equal(game.essence,STAGES[3].need);
+  game.step(1/60);
+  assert.equal(game.choose(0),true);
+  game.step(1/60);
+  assert.equal(game.boss?.type,8);
 });
-test('training remains safe and never awards permanent currency or interrupts with upgrades',()=>{const g=new Game();g.practice=true;g.pendingLevels=3;g.time=60;g.kills=30;tick(g,2);assert.equal(g.status,'playing');assert.equal(g.reward(),0);const hp=g.p.hp;g.hurt(100);assert.equal(g.p.hp,hp);});
+test('training remains safe and never awards permanent currency or interrupts with upgrades',()=>{const g=new Game();g.practice=true;g.waveTime=60;g.time=60;g.kills=30;tick(g,2);assert.equal(g.status,'playing');assert.equal(g.reward(),0);const hp=g.p.hp;g.hurt(100);assert.equal(g.p.hp,hp);});
 test('an airborne body settles into the cloud plane instead of hanging to the sea',()=>{const g=new Game();g.evolve();g.evolve();g.food=[];g.foodCD=100;g.spawnCD=100;tick(g,10);assert.ok(g.bodyPath.every(p=>Math.abs(p.y-g.p.y)<1));});
 test('bosses expose distinct charge, pulse, armour and meteor mechanics',()=>{
   for(let stage=0;stage<4;stage++){
@@ -158,7 +457,7 @@ test('a tail sweep pushes a soaked enemy farther without adding a second hit',()
     const enemy=game.spawnEnemy(0,origin.x+2,origin.z,origin.y);
     enemy.speed=0;enemy.hp=200;enemy.maxHp=200;enemy.wet=wet?5:0;
     const x=enemy.x;
-    tick(game,.9);
+    tick(game,.9,{x:0,z:0});
     return {moved:enemy.x-x,hp:enemy.hp};
   };
   const dry=strikes(false),wet=strikes(true);
@@ -172,21 +471,22 @@ test('a tail vortex trades remote reach for drawing extra enemies into the next 
     const game=new Game({seed:31,starter:'fang'});
     game.stage=2;
     game.food=[];
-    game.foodCD=game.spawnCD=game.hordeCD=game.marketAt=Infinity;
+    game.foodCD=game.spawnCD=game.hordeCD=Infinity;
     Object.assign(game.p,{mass:120,peakMass:120,y:.8,altitude:.8,invul:10,manualHeightUntil:10});
     game.syncBody();
     game.trail=Array.from({length:130},(_,i)=>({x:0,y:.8,z:-i*.28,t:-i/60}));
     game.updatePose(0);
-    const coil=game.cultivation.makeWeapon('coil',2,18);
-    const tail=game.cultivation.makeWeapon('tail',2,15);
+    const coil=game.cultivation.makeWeapon('coil',3);
+    const tail=game.cultivation.makeWeapon('tail',2);
     tail.cd=.70;
     coil.temper=form;
     game.cultivation.weapons=[coil,tail];
     game.cultivation.invalidateModifiers();
     const origin=attackOrigin(game,'tail');
-    const positions=rear?[[4.94,origin.z],[5.22,origin.z+.75],[0,origin.z-5.24]]:[[0,6.2],[.94,7.1],[-.84,5.8]];
+    const sweepEdge=techniqueStats(tail,game.cultivation.modifiers()).radius+.6;
+    const positions=rear?[[sweepEdge-.35,origin.z],[sweepEdge+.33,origin.z],[0,origin.z-sweepEdge-.38]]:[[0,6.2],[.94,7.1],[-.84,5.8]];
     for(const [x,z] of positions)Object.assign(game.spawnEnemy(4,x,z,.8),{hp:300,maxHp:300,speed:0,shootCD:Infinity});
-    for(let frame=0;frame<78;frame++)game.step(1/60,{autoHeight:false});
+    for(let frame=0;frame<78;frame++)game.step(1/60,{x:0,z:0});
     return {origin,game,casts:game.events.filter(e=>e.type==='weaponCast'),
       hits:game.events.filter(e=>e.type==='hit'&&e.source==='tail')};
   }
@@ -225,7 +525,7 @@ test('a crowd of ready kites staggers its dives',()=>{
   const starts=[];
   for(let frame=0;frame<390;frame++){
     game.events=[];
-    game.step(1/60,{autoHeight:false});
+    game.step(1/60,{x:0,z:0});
     for(const event of game.events)if(event.attack==='kite-dive')starts.push({time:game.time,id:event.enemyId});
     if(frame===0)assert.equal(starts.length,1);
   }
@@ -263,7 +563,7 @@ test('tempered lightning branches only from a wet relay and hits one extra targe
     const enemies=[[0,4],[0,7],[0,10],[0,13],[4,4],[5,4]].map(([x,z])=>game.spawnEnemy(0,x,z,.7));
     for(const enemy of enemies)enemy.hp=enemy.maxHp=200;
     enemies[0].wet=wet?5:0;
-    const weapon=game.cultivation.makeWeapon('spark',2,10);
+    const weapon=game.cultivation.makeWeapon('spark',2);
     weapon.temper=temper;
     assert.ok(fireTechnique(game,weapon));
     const arcs=game.events.filter(event=>event.type==='arc');
@@ -282,13 +582,17 @@ test('tempered lightning branches only from a wet relay and hits one extra targe
 test('close strike ink follows the same release, miss, cancellation and actual target',()=>{
   for(const outcome of ['hit','miss','cancel','replace']){
     const game=new Game({seed:3,starter:'fang'});
-    game.stage=3;
-    game.p.y=13;
-    const target=game.spawnEnemy(3,0,2,13);
-    const other=game.spawnEnemy(3,0,8,13);
+    game.stage=outcome==='hit'?1:3;
+    const height=game.stage===1?.82:13;
+    game.p.y=height;
+    const target=game.spawnEnemy(0,0,2,height);
+    const other=game.spawnEnemy(0,0,8,height);
     target.hp=other.hp=200;
     const strokes=new WeaponStrokes(new Scene());
-    assert.ok(fireTechnique(game,game.cultivation.weapons[0]));
+    const [weapon]=game.cultivation.weapons;
+    weapon.cd=.08;
+    assert.equal(previewAttackIntent(game).claw,true);
+    assert.ok(fireTechnique(game,weapon));
     const start=game.events.find(event=>event.type==='clawStart');
     strokes.event(start,0);
     assert.equal(strokes.entries.length,1);
@@ -349,11 +653,11 @@ test('the Kun brackets the locked flight altitude and leaves a safe middle',()=>
     game.cultivation.weapons=[];
     game.summonBoss();
     Object.assign(game.boss,{x:0,z:7,y:12,hp:game.boss.maxHp*.49,attack:0,speed:0});
-    game.step(.02,{autoHeight:false});
+    game.step(.02,{x:0,z:0});
     assert.equal(game.boss.bossPlan.definition.name,'sky-cross');
     assert.deepEqual(game.hazards.map(mark=>[mark.layer,mark.y,mark.radius]),[['low',9.65,1.86],['high',14.35,1.86]]);
     Object.assign(game.p,{y,altitude:y});
-    for(let i=0;i<105;i++)game.step(.02,{autoHeight:false});
+    for(let i=0;i<105;i++)game.step(.02,{x:0,z:0});
     const impacts=game.events.filter(event=>event.type==='hazardImpact');
     assert.deepEqual(impacts.map(impact=>[impact.layer,impact.hit]),[['low',layer==='low'],['high',layer==='high']]);
     assert.deepEqual(game.events.filter(event=>event.type==='hurt').map(event=>event.amount),layer==='middle'?[]:[43]);
@@ -407,7 +711,7 @@ test('tempered claw opens a real side window against a guarded turtle',()=>{
     game.summonBoss();
     const boss=game.boss;
     Object.assign(boss,{x:0,y:.8,z:3,angle,shield:true});
-    const weapon=game.cultivation.makeWeapon('fang',2,12);
+    const weapon=game.cultivation.makeWeapon('fang',2);
     weapon.temper=temper;
     weapon.cd=3;
     game.cultivation.weapons=[weapon];
@@ -426,36 +730,17 @@ test('tempered claw opens a real side window against a guarded turtle',()=>{
   }
 });
 
-test('trial receipts follow the offered weapon through pulse, projectile, and persistent field damage',()=>{
-  for(const id of ['drop','needle','ember']){
-    const live=new Game({seed:2});
-    live.cultivation.materials=30;
-    live.cultivation.open(0);
-    live.cultivation.offers[0]={id,tier:1,price:7,locked:false};
-    const preview=live.cultivation.previewTrade('buy',0);
-    const trial=createMarketTrial(live,preview,id);
-    const equipped=trial.cultivation.weapons.find(item=>item.uid===preview.weapon.uid);
-    trial.cultivation.weapons=[equipped];
-    trial.cultivation.invalidateModifiers();
-    for(let i=0;i<39;i++)trial.step(1/60,{});
-    assert.ok(trial.marketTrial.result?.targets>0,id);
-    assert.ok(trial.marketTrial.result.strongest>0,id);
-    if(id==='drop'||id==='needle')assert.ok(trial.marketTrial.result.targets>=2,id);
-    assert.equal(live.cultivation.materials,30);
-    assert.equal(live.cultivation.weapons.length,1);
-  }
-});
-
 test('wide water pulse displaces an already wet enemy only in its outer half',()=>{
   for(const temper of ['heavy-pulse','wide-pulse']){
     const game=new Game({seed:18});
     game.stage=2;
-    const weapon=game.cultivation.makeWeapon('drop',2,12);
+    const weapon=game.cultivation.makeWeapon('drop',2);
     weapon.temper=temper;
     weapon.cd=3;
     game.cultivation.weapons=[weapon];
     game.cultivation.invalidateModifiers();
-    const enemies=[[0,2,true],[-.5,3.2,true],[1.05,3.35,false]].map(([x,z,wet])=>{
+    const wideRadius=techniqueStats({...weapon,temper:'wide-pulse'},game.cultivation.modifiers()).radius;
+    const enemies=[[0,wideRadius*.32,true],[-.5,wideRadius*.65,true],[1.05,wideRadius*.66,false]].map(([x,z,wet])=>{
       const enemy=game.spawnEnemy(4,x,z,.7);
       enemy.hp=300;
       enemy.wet=wet?5:0;

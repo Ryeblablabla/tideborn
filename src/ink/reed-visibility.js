@@ -35,6 +35,7 @@ export class ReedVisibility {
   constructor(ink) {
     this.ink=ink;
     this.stage=-1;
+    this.revision=-1;
     this.foliage=[];
     this.head={value:new THREE.Vector3()};
     this.neck={value:new THREE.Vector3()};
@@ -43,11 +44,13 @@ export class ReedVisibility {
     this.offset=new THREE.Vector2();
   }
 
-  update(stage,frame,camera,dt,active) {
-    if(stage!==this.stage){
-      this.restore();
+  update(stage,frame,camera,dt,active,revision=0) {
+    if(stage!==this.stage||revision!==this.revision){
+      const current=stage===this.stage?new Map(this.foliage.map(clump=>[clump.root,clump])):null;
+      if(!current)this.restore();
       this.stage=stage;
-      this.foliage=stage<2?this.findCanopies():[];
+      this.revision=revision;
+      this.foliage=stage<2?this.findCanopies(current):[];
     }
     if(!this.foliage.length)return;
     if(!active){this.restore();return;}
@@ -91,13 +94,16 @@ export class ReedVisibility {
     out.set((out.x*.5+.5)*camera.aspect,out.y*.5+.5,out.z*.5+.5);
   }
 
-  findCanopies() {
+  findCanopies(current) {
     const groups=new Map();
     for(const record of this.ink.records){
       const {mesh}=record;
       const root=mesh.userData.shoreCanopy?mesh:mesh.parent;
       if(!root?.userData.shoreCanopy||root.parent?.userData.stage!==this.stage)continue;
-      if(!groups.has(root))groups.set(root,{root,parts:[],amount:0,opening:{value:0}});
+      if(!groups.has(root)){
+        const existing=current?.get(root);
+        groups.set(root,existing?{...existing,parts:[]}:{root,parts:[],amount:0,opening:{value:0}});
+      }
       const clump=groups.get(root),material=record.material;
       clump.parts.push(record);
       if(material.uniforms.uShoreOpening){material.uniforms.uShoreOpening=clump.opening;continue;}

@@ -5,21 +5,19 @@ import {DragonMotion}from'./dragon-motion.js';
 import {AttackPose}from'./attack-pose.js';
 import {DisplaySpine}from'./growth/curve-field.js';
 import {MineralPalette}from'./palette.js';
-import {PublicDragon}from'./public-dragon.js';
+import {FORM_BY_STAGE,PLAYABLE_FORMS}from'../rules.js';
+import { PublicDragon } from './public-dragon.js';
 import atlas from './assets/shared-ink-brush-atlas.png';
 import noise from './assets/shared-ink-flow-noise.png';
-const units=[6.2,6.8,7.0,7.4,7.8];
+const units={0:6.2,2:7.0,3:7.4,4:7.8};
 const shapeWashDuration=.66;
-const firstMoltDuration=.90;
 
 function shapeWash(entry, wash, axis) {
- for(const root of [entry.actor.root,entry.bridge.root]){
-  root?.traverse(node=>{
-   if(!node.isMesh)return;
-   node.userData.dragonWash=wash;
-   node.userData.dragonWashAxis=axis;
-  });
- }
+ entry.bridge.root.traverse(node=>{
+  if(!node.isMesh)return;
+  node.userData.dragonWash=wash;
+  node.userData.dragonWashAxis=axis;
+ });
 }
 
 export class InkDragon {
@@ -35,6 +33,7 @@ export class InkDragon {
  }
  resetMotion(){
   this.finishShapeChange();
+  this.chapterPreview=null;
   this.evolvingTo=null;
   this.motion=new DragonMotion();
   this.attackPose=new AttackPose();
@@ -42,16 +41,29 @@ export class InkDragon {
  muzzle(out,inset=0){
   return this.active?.actor.muzzle?.(out,inset)??null;
  }
+ setVisible(visible){
+  if(!visible){
+   for(const {bridge} of this.cache.values())bridge.root.visible=false;
+  }else if(this.active){
+   this.active.bridge.root.visible=true;
+  }
+ }
  event(event){
-  if(event.type==='evolve')this.evolvingTo=event.stage;
+  if(event.type==='evolve'){
+   const form=event.form??FORM_BY_STAGE[event.stage];
+   const previous=event.previousForm??FORM_BY_STAGE[event.stage-1];
+   const preview=this.chapterPreview;
+   const alreadyShown=preview?.from===previous&&preview.to===form&&this.stage===form;
+   this.evolvingTo=form===previous||alreadyShown?null:form;
+   if(alreadyShown)this.chapterPreview=null;
+  }
   this.motion.event(event);
   this.attackPose.event(event);
  }
  finishShapeChange(){
   if(!this.shapeChange)return;
   const {from,to}=this.shapeChange;
-  from.actor.root.visible=false;
-  if(from.bridge.root)from.bridge.root.visible=false;
+  from.bridge.root.visible=false;
   shapeWash(from,undefined);shapeWash(to,undefined);
   this.shapeChange=null;
  }
@@ -64,40 +76,89 @@ export class InkDragon {
   this.cache.set(stage,entry);
   return entry;
  }
- select(stage){
-  this.desired=stage;const entry=this.load(stage);
+ prepareTransitionLength(){
+  // The procedural mesh has a fixed number of rings, even when its length grows.
+ }
+ async select(stage,{preloadNext=true}={}){
+  this.desired=stage;const entry=this.load(stage);if(this.desired!==stage)return entry;
   const previous=this.active;
-  const evolve=stage===this.evolvingTo&&previous?.stage===stage-1;
+  const index=PLAYABLE_FORMS.indexOf(stage);
+  const evolve=index>0&&stage===this.evolvingTo&&previous?.stage===PLAYABLE_FORMS[index-1];
   this.finishShapeChange();
-  for(const r of this.cache.values()){r.actor.root.visible=false;if(r.bridge.root)r.bridge.root.visible=false;}
-  this.active=entry;this.stage=stage;this.state='ready';entry.actor.root.visible=true;
+  for(const {bridge} of this.cache.values())bridge.root.visible=false;
+  this.active=entry;this.stage=stage;this.state='ready';
   this.evolvingTo=null;
   if(evolve){
-   const first=stage===1;
    const length=this.motion.length;
-   this.shapeChange={from:previous,to:entry,age:0,duration:first?firstMoltDuration:shapeWashDuration,
-    first,initialLength:length,length,out:new THREE.Vector2(0,-1),into:new THREE.Vector2(0,1),axis:new THREE.Vector3()};
+   this.shapeChange={from:previous,to:entry,age:0,duration:shapeWashDuration,
+    length,out:new THREE.Vector2(0,-1),into:new THREE.Vector2(0,1),axis:new THREE.Vector3()};
   }
+  if(preloadNext)this.preloadNext(stage);
   return entry;
  }
+ preloadNext(stage){
+  const next=PLAYABLE_FORMS[PLAYABLE_FORMS.indexOf(stage)+1];
+  if(next!==undefined)this.load(next);
+ }
  update(frame,dt){
-  if(this.desired!==frame.stage)this.select(frame.stage);
+  if(frame.chapterPreviewForm===true&&frame.stage===4&&this.stage!==4){
+   if(this.stage===3&&this.cache.has(4)){
+    this.chapterPreview={from:3,to:4};
+    this.evolvingTo=4;
+   }else{
+    frame={...frame,stage:3,chapterMorph:undefined,chapterWing:undefined};
+   }
+  }else if(frame.chapterPreviewForm!==true&&frame.stage!==this.chapterPreview?.to){
+   this.chapterPreview=null;
+  }
+  if(this.desired!==frame.stage){this.state='loading';this.select(frame.stage,{preloadNext:frame.chapterMorph===undefined}).catch(e=>{this.state='error';console.error(e);});}
   if(!this.active||this.stage!==frame.stage)return;
   const {spine:points,stage}=frame;
   if(!points?.length)return;
 
   const motion=this.motion;
   motion.update(frame,dt);
+  motion.chapterMorph=frame.chapterMorph;
+  motion.chapterWing=frame.chapterWing;
+  motion.crownLift=frame.crownLift??0;
+  motion.crownTurn=frame.crownTurn??0;
+  motion.waveTuck=frame.waveTuck??0;
+  motion.valleyBank=frame.valleyBank??0;
   this.attackPose.apply(motion,dt);
+  motion.dragonArt=frame.dragonArt;
+  const handoff=frame.combatHandoff;
+  const handoffX=handoff ? handoff.x-frame.position.x : 0;
+  const handoffZ=handoff ? handoff.z-frame.position.z : 0;
+  const forward=handoffX*Math.sin(frame.heading)+handoffZ*Math.cos(frame.heading);
+  motion.combatWingRelease=handoff ? handoff.gain*THREE.MathUtils.smoothstep(forward,3,10)*
+   (.46+.54*handoff.receiver) : 0;
+  const art=motion.dragonArt;
+  motion.riftClosing=0;
+  if(art?.kind==='beam'){
+   const cast=art.phase==='sweep'||art.phase==='echo';
+   const lead=art.sweepAngle??art.angle;
+   const delta=lead-motion.heading;
+   motion.dragonArtYaw=THREE.MathUtils.clamp(Math.atan2(Math.sin(delta),Math.cos(delta)),-1.25,1.25);
+   motion.jaw=Math.max(motion.jaw,cast?.99:.44);
+   motion.attackPitch+=cast?.12+Math.atan(art.beamPitch??0)*.74:.17;
+  }else motion.dragonArtYaw=0;
+  if(art?.kind==='rift'&&art.age<.61){
+   const {smoothstep}=THREE.MathUtils;
+   const draw=smoothstep(art.age,.055,.21)*(1-smoothstep(art.age,.33,.56));
+   const cut=smoothstep(art.age,.19,.30)*(1-smoothstep(art.age,.40,.59));
+   motion.anticipate=Math.max(motion.anticipate,draw*.58);
+   motion.strike=Math.max(motion.strike,cut*.86);
+   motion.grip=Math.max(motion.grip,cut*.49);
+   motion.attackPitch+=draw*.065-cut*.09;
+   motion.clawSide=null;
+  }
+  if(handoff?.route==='rift-seam')motion.riftClosing=handoff.receiver*handoff.gain;
+  motion.updateGlidePose(dt);
   const change=this.shapeChange;
   if(change)change.age+=dt;
-  const molt=change?.first&&change.initialLength>0&&change.age<change.duration?change:null;
-  // Show the heavier head and forebody while the old trail is still visible.
-  // The tail draws inward after the new form has started to read.
-  const contract=molt?THREE.MathUtils.smoothstep(molt.age,.27,.86):1;
-  const length=molt?THREE.MathUtils.lerp(molt.initialLength,motion.length,contract):motion.length;
-  const formScale=molt?THREE.MathUtils.lerp(units[0],units[1],THREE.MathUtils.smoothstep(molt.age,.07,.52)):units[stage];
-  const scale=Math.min(formScale,length);
+  const shapeProgress=change?(frame.chapterMorph??THREE.MathUtils.clamp(change.age/change.duration,0,1)):1;
+  const length=motion.length;
+  const scale=Math.min(units[stage],length);
   const spacing=.65*(1+stage*.08);
   const visibleSegments=length/spacing;
   // A hit truncates bodyPath immediately. Sample the same travelled trail
@@ -109,10 +170,17 @@ export class InkDragon {
   if(!this.spine.set(displayPath,motion.heading,scale,motion,stage,.38*length/scale))return;
   if(change){
    change.length=length;
-   if(change.age>=change.duration)this.finishShapeChange();
+   if(shapeProgress>=1)this.finishShapeChange();
    else{
-    const progress=THREE.MathUtils.smoothstep(change.age,0,change.first ? .64 : change.duration);
+    // Spend the close shot on the brow and claws. The trailing shape clears
+    // as the camera opens out, away from the close framing of the shoulder.
+    const progress=frame.chapterMorph===undefined||frame.chapterWing
+     ?THREE.MathUtils.smoothstep(shapeProgress,0,1)
+     :THREE.MathUtils.lerp(.52*shapeProgress,shapeProgress,THREE.MathUtils.smootherstep(shapeProgress,.52,.98));
     change.out.x=change.into.x=progress;
+    const softness=frame.chapterWing?3:frame.chapterMorph===undefined?1:2;
+    change.out.y=-softness;
+    change.into.y=softness;
     this.poseEntry(change.from,length);
     shapeWash(change.from,change.out,change.axis);
    }
@@ -128,7 +196,7 @@ export class InkDragon {
  orientShapeWash(camera){
   const change=this.shapeChange;
   const {actor}=change.to;
-  const points=actor.centers;
+  const points=actor.pathPoints;
   if(points.length<2||!(change.length>0))return;
   camera.updateMatrixWorld();
   const viewport=this.renderer.getDrawingBufferSize(new THREE.Vector2()).multiplyScalar(.5);
@@ -139,10 +207,13 @@ export class InkDragon {
   const dx=(middle.x-head.x)*viewport.x,dy=(middle.y-head.y)*viewport.y;
   if(!Number.isFinite(dx+dy))return;
   const length=Math.hypot(dx,dy);
-  const span=Math.max(30,length*1.88);
+  // During the chapter shot the old outline yields from the nose along the
+  // neck and then toward the hind legs, instead of dissolving all at once.
+  const cinematic=this.motion.chapterMorph!==undefined;
+  const span=Math.max(30,length*(cinematic?1.05:1.88));
   const x=length>3?dx/length/span:1/span;
   const y=length>3?dy/length/span:0;
-  change.axis.set(x,y,-(head.x+1)*viewport.x*x-(head.y+1)*viewport.y*y);
+  change.axis.set(x,y,-(head.x+1)*viewport.x*x-(head.y+1)*viewport.y*y+(cinematic?.12:0));
  }
  render(scene,camera){
   if(this.shapeChange)this.orientShapeWash(camera);

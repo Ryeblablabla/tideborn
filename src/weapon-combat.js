@@ -1,6 +1,8 @@
 import { techniqueStats } from './cultivation.js';
 import { knockBackEnemy } from './encounters.js';
-import { beginTrialHits } from './trial-hits.js';
+import { ENEMY_RADIUS_LIMIT } from './enemy-grid.js';
+import { castTechniqueArt, isTechniqueArt } from './technique-arts.js';
+import { beamRainPlacement } from './dragon-arts.js';
 
 const center = ({ x, y, z }) => ({ x, y, z });
 const contactPoint = ({ x, y, z, radius }) => ({ x, y, z, radius });
@@ -8,6 +10,7 @@ const distance = (a,b) => Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z);
 const windups = { fang: .19, tail: .28, drop: .22 };
 const tailIndex = path => Math.max(0,Math.floor((path.length-1)*.74));
 export const SHOT_CONTACT_MARGIN=.38;
+const hasClaws = game => game.form >= 2;
 
 export function attackOrigin(game, id) {
   if (id !== 'tail') return game.p;
@@ -35,7 +38,7 @@ function findTarget(game, origin, reach, axis = null) {
   const boss=game.boss;
   if(boss?.bossPlan?.phase==='recovery'&&targetInArc(origin,boss,reach,axis))return boss;
   let selected = null, nearest = Infinity;
-  for (const target of game.enemies) {
+  for (const target of game.enemiesNear(origin, reach + .6)) {
     if (!targetInArc(origin,target,reach,axis)) continue;
     const d = distance(origin,target);
     if (d < nearest) { nearest=d; selected=target; }
@@ -43,11 +46,27 @@ function findTarget(game, origin, reach, axis = null) {
   return selected;
 }
 
+function findRainTarget(game, origin, technique, fallback) {
+  if(game.stage!==3 || !game.dragonScorch?.lanes.length)return fallback;
+  const near=game.enemiesNear(origin,technique.range+.6)
+    .filter(enemy=>!enemy.boss&&targetInArc(origin,enemy,technique.range,null))
+    .sort((a,b)=>distance(origin,a)-distance(origin,b)||a.id-b.id)
+    .slice(0,8);
+  let target=fallback,best=0;
+  for(const enemy of near) {
+    const rating=beamRainPlacement(game,enemy,technique.radius);
+    if(rating===null)continue;
+    const score=rating-distance(origin,enemy)*.032;
+    if(score>best){best=score;target=enemy;}
+  }
+  return target;
+}
+
 function piercingTarget(game,origin,technique,nearest) {
   if(technique.pierce<=1||(nearest===game.boss&&nearest.bossPlan?.phase==='recovery'))return nearest;
   const flight=technique.range+2.1;
   const crowd=[];
-  for(const enemy of game.enemies){
+  for(const enemy of game.enemiesNear(origin,flight+ENEMY_RADIUS_LIMIT)){
     if(enemy.hp<=0)continue;
     const x=enemy.x-origin.x,y=enemy.y-origin.y,z=enemy.z-origin.z;
     const length=Math.hypot(x,y,z);
@@ -91,7 +110,7 @@ export function previewAttackIntent(game) {
   const { target, shootIn, technique, claw } = selected;
   const progress = Math.max(0, (shootIn - .03) / (lead - .03));
   return { target: claw ? target : piercingTarget(game, origin, technique, target),
-    shootIn, claw: claw && game.stage >= 2, prepare: 1 - progress * progress * (3 - 2 * progress) };
+    shootIn, claw: claw && hasClaws(game), prepare: 1 - progress * progress * (3 - 2 * progress) };
 }
 
 function launch(game, from, target, technique, weapon) {
@@ -106,7 +125,6 @@ function launch(game, from, target, technique, weapon) {
   const life = (technique.range+2.1)/speed;
   const muzzleBlend = Math.max(.04,Math.min(.18,(length-target.radius)/speed*.46));
   const volleyHits=count>1 ? new Map() : null;
-  const trialHits=beginTrialHits(game,weapon.uid);
   for(let i=0;i<count;i++) {
     const angle=aim+(i-(count-1)*.5)*fan;
     game.shots.push({
@@ -114,14 +132,14 @@ function launch(game, from, target, technique, weapon) {
       vx:Math.sin(angle)*planar, vy:dy, vz:Math.cos(angle)*planar,
       life,startLife:life,muzzleBlend,
       damage:game.stats().damage*technique.power, pierce:technique.pierce,
-      hitIds:new Set(), volleyHits, kind, element:technique.element, tier:weapon.tier,trialHits,
+      hitIds:new Set(), volleyHits, kind, element:technique.element, tier:weapon.tier,
     });
   }
   game.emit('shoot',{...center(from),to:center(target),weapon:technique.id,kind,count,tier:weapon.tier});
 }
 
 function beginStrike(game, origin, target, technique, weapon) {
-  const kind = technique.id === 'tail' ? 'tail' : technique.kind === 'pulse' ? 'water' : game.stage>=2 ? 'claw' : 'bite';
+  const kind = technique.id === 'tail' ? 'tail' : technique.kind === 'pulse' ? 'water' : hasClaws(game) ? 'claw' : 'bite';
   const time = windups[technique.id] || .18;
   const heading = strikeHeading(game,kind);
   const side = Math.cos(heading)*(target.x-origin.x)-Math.sin(heading)*(target.z-origin.z)<0 ? -1 : 1;
@@ -130,7 +148,6 @@ function beginStrike(game, origin, target, technique, weapon) {
     tier:weapon.tier, releaseAt:game.time+time, stage:game.stage,
     angle:game.p.angle, from:center(origin), aim:contactPoint(target),
     damage:game.stats().damage*technique.power,
-    trialHits:beginTrialHits(game,weapon.uid),
   };
   game.weaponStrikes.push(strike);
   if(kind==='claw'||kind==='bite')game.clawAttack=strike;
@@ -148,7 +165,7 @@ function releaseStrike(game, strike, cancelled = false) {
   const origin = attackOrigin(game,technique.id);
   const y = origin.y, radius = technique.radius||technique.range;
   const arc = kind==='claw'||kind==='bite' ? strike.angle : null;
-  const hits = cancelled ? [] : game.enemies.filter(enemy=>
+  const hits = cancelled ? [] : game.enemiesNear(origin,radius+.6).filter(enemy=>
     targetInArc(origin,enemy,radius,arc)
     && (kind!=='water'||Math.abs(enemy.y-y)<1.65+enemy.radius*.24));
   const contact=hits.includes(target)?target:hits[0];
@@ -171,10 +188,8 @@ function releaseStrike(game, strike, cancelled = false) {
         game.emit('armorBreak',{...center(enemy),from:center(origin),targetId:enemy.id,strikeId:strike.id});
       }
     }
-    game.damage(enemy,damage,impact,origin,strike.id,strike.trialHits);
-    if((kind!=='water'||driven)&&knockBackEnemy(game,enemy,origin,driven?'tail':kind,tier)){
-      if(strike.trialHits)enemy.weaponPush.trial={receipt:strike.trialHits,x:enemy.x,z:enemy.z};
-    }
+    game.damage(enemy,damage,impact,origin,strike.id);
+    if(kind!=='water'||driven)knockBackEnemy(game,enemy,origin,driven?'tail':kind,tier);
   }
 }
 
@@ -187,11 +202,14 @@ export function fireTechnique(game, weapon, modifiers=game.cultivation.modifiers
   const technique=techniqueStats(weapon,modifiers);
   if(!technique)return false;
   const origin=attackOrigin(game,technique.tailVortex?'tail':technique.id);
+  if(isTechniqueArt(technique.kind))return castTechniqueArt(game,origin,technique);
   const contact=technique.kind==='melee'&&technique.id!=='tail';
   if(contact&&game.clawAttack)return false;
   const reach=technique.kind==='pulse'?technique.radius:technique.range;
-  const target=findTarget(game,origin,reach,contact?game.p.angle:null);
+  let target=findTarget(game,origin,reach,contact?game.p.angle:null);
   if(!target)return false;
+  const intent=target;
+  if(technique.id==='torrent')target=findRainTarget(game,origin,technique,target);
   if(technique.kind==='melee'||technique.kind==='pulse') {
     beginStrike(game,origin,target,technique,weapon);
   } else if(technique.kind==='projectile') {
@@ -199,20 +217,19 @@ export function fireTechnique(game, weapon, modifiers=game.cultivation.modifiers
   } else if(technique.kind==='arc') {
     game.emit('weaponCast',{...center(origin),to:center(target),weapon:technique.id,tier:weapon.tier,kind:'arc'});
     game.lightning(target,weapon.tier,'lightning',origin,{
-      damage:game.stats().damage*technique.power, chain:technique.chain, wetBranch:technique.wetBranch,
-      trialHits:beginTrialHits(game,weapon.uid),
+      damage:game.stats().damage*technique.power, chain:technique.chain, jumpReach:technique.jumpReach, wetBranch:technique.wetBranch,
     });
   } else if(technique.kind==='zone') {
     const landing=technique.tailVortex?origin:target;
     const anchor=technique.tailVortex?'tail':undefined;
     const zone=game.addZone(technique.field,{
       ...center(landing),power:weapon.tier,radius:technique.radius,life:technique.life,
-      damageFactor:technique.power,weapon:technique.id,weaponAnchor:anchor,trialHits:beginTrialHits(game,weapon.uid),
+      damageFactor:technique.power,weapon:technique.id,weaponAnchor:anchor,
     });
     if(!zone)return false;
     if(technique.field==='thunder')zone.energy=Math.min(12,zone.energy+(technique.energy||2));
     game.emit('weaponCast',{...center(origin),to:center(anchor?zone:target),weapon:technique.id,tier:weapon.tier,
-      kind:technique.field,...(anchor?{anchor}:{})});
+      kind:technique.field,...(anchor?{anchor}:{}),...(intent!==target?{combined:'beam-scorch',targetId:target.id}:null)});
   }
   return true;
 }

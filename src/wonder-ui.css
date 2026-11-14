@@ -1,0 +1,105 @@
+.quiet-hud .wonder-guide {
+  position: absolute;
+  inset: max(19px, calc(env(safe-area-inset-top) + 8px)) auto auto max(18px, env(safe-area-inset-left));
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 9px;
+  max-width: min(310px, 70vw);
+  padding: 8px 26px 8px 9px;
+  color: #2c473b;
+  background: linear-gradient(100deg, #f5f0e6fa 35%, #f5f0e6e8 78%, #f5f0e600);
+  pointer-events: none;
+}
+
+.quiet-hud .wonder-guide[hidden], .wonder-guide [hidden] { display: none; }
+.ending-route-shot .wonder-guide, .chapter-transition-active .wonder-guide { visibility: hidden; }
+.quiet-hud .passage-guide { position: absolute; right: max(16px, env(safe-area-inset-right)); bottom: max(78px, calc(env(safe-area-inset-bottom) + 58px)); max-width: min(300px,74vw); display: grid; gap: 4px; padding: 7px 12px 8px 16px; border-inline-end: 2px solid #72876d; color: #395f51; background: linear-gradient(270deg,#f2ebdff5 40%,#f2ebdfdd 84%,#f2ebdf10); text-align: right; }
+.quiet-hud .passage-guide[hidden] { display: none; }
+.ending-route-shot .passage-guide, .chapter-transition-active .passage-guide { visibility: hidden; }
+.passage-guide strong { font: 400 20px/1 var(--calligraphy, serif); }
+.passage-guide span { font: 500 12px/1.35 var(--ledger-type, sans-serif); }
+@media (pointer: coarse) {
+  .quiet-hud .passage-guide { bottom: max(140px, calc(env(safe-area-inset-bottom) + 116px)); }
+}
+.quiet-hud .wonder-charge { position: absolute; inset: auto auto max(65px, env(safe-area-inset-bottom)) 50%; transform: translateX(-50%); padding: 5px 10px; margin: 0; background: #f4eddef1; color: #38546a; font-size: 12px; white-space: nowrap; }
+.quiet-hud .wonder-charge[hidden] { display: none; }
+.quiet-hud .wonder-guide[data-danger="true"] { color: #823a2b; }
+
+.wonder-stamp {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 27px;
+  margin-top: 1px;
+  background: #efe8d9;
+  border: 1px solid #945b449d;
+  border-radius: 1px 2px 3px 2px;
+  color: #874c37;
+  font: normal 18px/1 var(--calligraphy, serif);
+  transform: rotate(-4deg);
+}
+
+.wonder-guide[data-active="true"] .wonder-stamp { background: #873c2e; color: #fff4de; }
+.wonder-heading { display: flex; flex-wrap: wrap; gap: 4px 9px; align-items: baseline; }
+.wonder-heading strong { font: 400 clamp(19px, 2vw, 24px)/1 var(--calligraphy, serif); }
+.wonder-guide p, .wonder-bearing { font: 500 12px/1.5 var(--ledger-type, sans-serif); }
+.wonder-guide p { margin: 3px 0 0; }
+.wonder-alternate { display: block; margin-top: 4px; color: #52694f; font: 500 11px/1.4 var(--ledger-type, sans-serif); }
+.ink-art .wonder-enter { min-height: 38px; margin-top: 6px; padding: 5px 10px; border: 1px solid #8f493a80; background: #f4ecdd; color: #773b30; font-size: 13px; }
+.wonder-enter kbd { margin-inline-start: 5px; }
+@media (pointer: coarse) { .wonder-enter { min-height: 44px; } .wonder-enter kbd { display: none; } }
+.wonder-bearing { display: flex; align-items: center; gap: 4px; color: #516753; white-space: nowrap; }
+.wonder-bearing i { display: inline-block; font: 600 16px/1 system-ui, sans-serif; color: #804838; }
+.wonder-guide progress { display: block; width: 100%; height: 4px; margin-top: 5px; border: none; appearance: none; }
+.wonder-guide progress::-webkit-progress-bar { background: #68554028; }
+.wonder-guide progress::-webkit-progress-value { background: #873c2e; }
+.wonder-guide progress::-moz-progress-bar { background: #873c2e; }
+
+.ink-art .modal .wonder-market-origin {
+  margin: 0 0 3px;
+  color: #844735;
+  font: 600 13px/1.3 var(--ledger-type, sans-serif);
+}
+
+.ink-art .journey-atlas { width: min(380px, 92vw); padding: 18px; max-height: 94dvh; overflow: auto; }
+.journey-atlas canvas { display: block; width: min(300px, 100%, 62dvh); height: auto; margin: 0 auto 8px; border: 1px solid #88795f70; }
+.journey-atlas p { margin: 6px 0 12px; font-size: 13px; }
+.journey-atlas .text-button { margin-top: 8px; min-height: 42px; }
+.journey-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 15px; color: #496250; font-size: 12px; }
+.atlas-sites { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 5px; margin: 10px auto 0; text-align: left; }
+.ink-art .atlas-sites button { display: grid; grid-template-columns: auto 1fr; gap: 0 5px; min-height: 42px; padding: 5px 7px; text-align: left; letter-spacing: 0; }
+.atlas-sites button[aria-pressed="true"] { border-color: #873d30; color: #873d30; }
+.atlas-sites small { grid-column: 2; font-size: 10px; }
+.atlas-pin { color: #873d30; }
+.ink-art .result-modal .result-stats:has(div:nth-child(4)) { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.ink-art .result-modal .result-stats:has(div:nth-child(4)) dt { font-size: clamp(11px, 1.45vw, 14px); }
+.drill-status { position: absolute; inset: 18px auto auto 16px; display: grid; gap: 3px; padding: 8px 12px; background: #f2ece0e8; color: #405744; font-size: 13px; }
+.drill-status strong { color: #823a2b; font-size: 22px; line-height: 1; }
+.drill-status #drill-surge { color: #823a2b; }
+.drill-body { display: flex; align-items: center; gap: 7px; }
+.drill-body meter { flex: 1; min-width: 72px; height: 9px; }
+.drill-body meter::-webkit-meter-bar { background: #e0d9cb; border: none; border-radius: 0; }
+.drill-body meter::-webkit-meter-optimum-value { background: #56735d; }
+.drill-body[data-low="true"] meter::-webkit-meter-optimum-value { background: #934231; }
+.ink-art .modal .drill-grade { color: #6b5241; font-size: 13px; }
+.drill-grade b { margin-inline-end: 5px; color: #873d30; font-size: 20px; }
+.drill-best { margin: 5px 0; font-size: 12px; }
+.ink-art .result-modal .replay-journey { margin-top: 8px; min-height: 36px; }
+.ink-art .result-modal .journey-seed-result { margin: 12px 0 0; color: #685a48; font-size: 11px; }
+.ink-art .journey-seed { width: min(355px,92vw); padding: 20px; }
+.journey-seed label { display: block; margin: 10px 0 6px; color: #405a4a; font-size: 14px; }
+.journey-seed input { width: 100%; padding: 8px 10px; border: 1px solid #88795f90; background: #fff9ee; color: #334d43; font: 16px var(--ledger-type,sans-serif); }
+.journey-seed .primary { margin: 10px auto 0; min-height: 44px; }
+.ink-art .drill-entry { min-height: 44px; margin: 8px 10px 0 0; }
+.drill-entry small { margin-inline-start: 4px; }
+
+@media (max-width: 650px) {
+  .quiet-hud .wonder-guide {
+    inset-block-start: max(10px, env(safe-area-inset-top));
+    inset-inline-start: max(8px, env(safe-area-inset-left));
+    gap: 6px;
+    padding: 6px 16px 6px 6px;
+  }
+  .wonder-stamp { width: 22px; height: 23px; font-size: 16px; }
+}

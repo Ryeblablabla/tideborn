@@ -2,7 +2,20 @@ import { MathUtils } from 'three';
 
 const { euclideanModulo, lerp, smoothstep } = MathUtils;
 
-/** The timing matches both wingbeats in the baked Cloud_Flight cycle. */
+/** The spread wing presses down quickly, then rises more slowly. */
+export function wingElevation(wingPhase) {
+  const phase = euclideanModulo(wingPhase - .08, 1);
+  const downstroke = .38;
+  const arc = phase < downstroke ? phase / downstroke : 1 + (phase - downstroke) / (1 - downstroke);
+  return Math.cos(Math.PI * arc);
+}
+
+export function wingFold(wingPhase) {
+  const phase = euclideanModulo(wingPhase, 1);
+  return smoothstep(phase, .40, .68) * (1 - smoothstep(phase, .71, .99));
+}
+
+/** The load pulses are shared by the live stroke and the baked arrival. */
 export function flightStroke(wingPhase, target = {}) {
   const phase = euclideanModulo(wingPhase, 1);
   target.load = smoothstep(phase, .11, .24) * (1 - smoothstep(phase, .28, .43));

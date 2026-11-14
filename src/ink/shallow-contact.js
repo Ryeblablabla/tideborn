@@ -70,12 +70,16 @@ export class ShallowContact {
     this.waterY = surface + .026;
     const head = game.p, spine = game.bodyPath;
     const stageWidth = game.stage === 0 ? .57 : .86;
-    this.write(head.x, head.z, head.angle, stageWidth, 1.05, .24, 0);
+    const wetness = y => 1 - THREE.MathUtils.smoothstep(y - surface, 1.04, 2.02);
+    const headInk = .24 * wetness(head.y);
+    if (headInk > .015) this.write(head.x, head.z, head.angle, stageWidth, 1.05, headInk, 0);
     for (let i = 1; i < spine.length; i++) {
       const before = spine[i - 1], at = spine[i];
+      const ink = .19 * wetness(at.y);
+      if (ink <= .015) continue;
       const taper = 1 - .61 * (i / spine.length) ** 2;
       const angle = Math.atan2(before.x - at.x, before.z - at.z);
-      this.write(at.x, at.z, angle, stageWidth * taper, .58, .19, i * .61);
+      this.write(at.x, at.z, angle, stageWidth * taper, .58, ink, i * .61);
     }
 
     for (const enemy of game.enemies) {

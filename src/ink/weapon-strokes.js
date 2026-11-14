@@ -263,7 +263,8 @@ export class WeaponStrokes {
       }else{
         const tail=event.strike==='tail', bite=event.strike==='bite';
         const lanes=tail?2:bite?2:3;
-        const reach=tail?Math.min(4.7,event.radius):Math.min(2.65,event.radius);
+        const coverage=1+.15*Math.max(0,(event.tier??1)-1);
+        const reach=Math.min((tail?4.7:2.65)*coverage,event.radius);
         for(let i=0;i<lanes;i++){
           const side=(event.side||1)*(tail?1:.72);
           const root={x:event.x,y:event.y+(i-(lanes-1)*.5)*.19,z:event.z};

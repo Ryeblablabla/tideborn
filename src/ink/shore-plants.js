@@ -133,7 +133,7 @@ function reedClump(environment, root, [x,z,size,lean,ink,seed,stance], contacts)
   head.name = '苇穗';
 }
 
-function lotusLeaf(radius, tilt, seed) {
+export function lotusLeaf(radius, tilt, seed) {
   const notch = .12 + (seed % 13) * .014;
   return surface(8,36,(u,v) => {
     const angle = notch + v * (TAU - 2 * notch);
@@ -222,6 +222,7 @@ function lotusPlant(environment, root, x, z, radius, height, flower, seed, conta
     wind:true,
   });
   mesh.name = height > .12 ? '立荷' : '莲叶';
+  if(height>.12)mesh.userData.lotusRadius=radius;
   if (height > .12 || flower) {
     const flowerH = (flower==='bud'?.63:flower==='pod'?.38:.49) + radius * .48 + rng()*.26;
     const stems = [];
@@ -407,6 +408,16 @@ function lakeRush(environment,root,[x,z,size,seed],contacts) {
   });
   heads.name='菖蒲短穗';
   contacts.push({x,z,angle:.40,length:.83*size,width:.074*size,ink:.24,seed});
+}
+
+export function addFrontierShorePlants(environment, root, stage, sites, lilySite) {
+  const contacts = [];
+  for (const {x,z,size,heading,seed} of sites) {
+    if (stage === 0) reedClump(environment,root,[x,z,size,heading,.62,seed,'rooted'],contacts);
+    else lakeRush(environment,root,[x,z,size,seed],contacts);
+  }
+  if(lilySite)lotusPatch(environment,root,lilySite,contacts);
+  shoreContact(environment,root,contacts,'远汀草根湿墨');
 }
 
 export function populateShallows(environment, root, stage) {

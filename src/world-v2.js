@@ -4,7 +4,7 @@ import { CombatVFX } from './combat-vfx.js';
 import { AIR_ISLANDS } from './simulation.js';
 import { random } from './model.js';
 export class LivingWorld extends OceanScene {
-  constructor(canvas){super(canvas);this.flatCamera=this.camera;this.flightCamera=new THREE.PerspectiveCamera(49,innerWidth/innerHeight,.1,250);this.flight=0;this.combat=new CombatVFX(this.scene);this.sky=new THREE.Group();this.scene.add(this.sky);this.createSky();this.flashLight=new THREE.PointLight('#c4c9ff',0,35,1);this.scene.add(this.flashLight);this.character=null;this.factory=null;this.frame={};this.hitStop=0;window.addEventListener('tideborn:character-ready',()=>this.tryCharacter());this.tryCharacter();}
+  constructor(canvas){super(canvas);this.flatCamera=this.camera;this.flightCamera=new THREE.PerspectiveCamera(49,innerWidth/innerHeight,.1,250);this.flight=0;this.viewYaw=null;this.viewPivot=new THREE.Vector3();this.viewFocus=new THREE.Vector3();this.combat=new CombatVFX(this.scene);this.sky=new THREE.Group();this.scene.add(this.sky);this.createSky();this.flashLight=new THREE.PointLight('#c4c9ff',0,35,1);this.scene.add(this.flashLight);this.character=null;this.factory=null;this.frame={};this.hitStop=0;window.addEventListener('tideborn:character-ready',()=>this.tryCharacter());this.tryCharacter();}
   tryCharacter(){const factory=window.TidebornCharacterFactory;if(typeof factory!=='function'||factory===this.factory)return;try{const runtime=factory({THREE,scene:this.scene});if(!runtime||typeof runtime.update!=='function')return;this.character?.dispose?.();this.character=runtime;this.factory=factory;}catch(e){console.warn('Character adapter unavailable',e);}}
   createSky(){
     const skyMat=new THREE.ShaderMaterial({side:THREE.BackSide,depthWrite:false,uniforms:{phase:{value:0},time:{value:0}},vertexShader:'varying vec3 vP;void main(){vP=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',fragmentShader:'varying vec3 vP;uniform float phase;uniform float time;float hash(vec3 p){return fract(sin(dot(p,vec3(127.1,311.7,74.7)))*43758.5);}void main(){float h=clamp(vP.y/100.+.4,0.,1.);vec3 c=mix(vec3(.77,.82,.73),vec3(.17,.32,.48),h);float sun=pow(max(0.,dot(normalize(vP),normalize(vec3(-.7,.3,-.4)))),80.);c+=sun*vec3(.65,.45,.22);vec3 night=mix(vec3(.3,.38,.53),vec3(.055,.08,.2),h);float stars=step(.997,hash(floor(vP*1.1)))*step(5.,vP.y);night+=stars*vec3(.7,.8,.7);float aurora=pow(max(0.,sin(vP.x*.055+sin(vP.z*.04+time*.08)*2.)),12.)*smoothstep(8.,40.,vP.y);night+=aurora*vec3(.08,.2,.15);c=mix(c,night,phase*.82);gl_FragColor=vec4(c,1.);}'});
@@ -28,6 +28,32 @@ export class LivingWorld extends OceanScene {
     this.ray.far=Infinity;
   }
   event(e){this.combat.event(e);if(e.type==='arc'){this.flashLight.intensity=.75;this.flashLight.position.set(e.to.x,e.to.y+2,e.to.z);}if(e.type==='hurt')this.shake=.55;if(e.type==='ringBurst'){this.shake=Math.max(this.shake,.22);this.hitStop=.035;}if(e.type==='evolve')this.shake=.5;}
+  followPlayer(game,dt){
+    const {x,z,angle}=game.p;
+    const focus=this.viewFocus.set(x,this.player.position.y,z);
+    if(this.viewYaw===null||this.viewStage!==game.stage){
+      this.viewStage=game.stage;
+      this.viewYaw=angle;
+      this.viewPivot.copy(focus);
+    }else{
+      const delta=angle-this.viewYaw;
+      this.viewYaw+=Math.atan2(Math.sin(delta),Math.cos(delta))*(1-Math.exp(-dt*8.5));
+      this.viewPivot.lerp(focus,1-Math.exp(-dt*10));
+    }
+    const a=this.flight;
+    const sin=Math.sin(this.viewYaw),cos=Math.cos(this.viewYaw);
+    const {x:px,y:py,z:pz}=this.viewPivot;
+    const distance=THREE.MathUtils.lerp(25,21,a),height=THREE.MathUtils.lerp(30,12,a);
+    const shoulder=5*a,ahead=THREE.MathUtils.lerp(1.5,2.5,a);
+    this.camera=a>.005?this.flightCamera:this.flatCamera;
+    this.camera.position.set(px-sin*distance+cos*shoulder,py+height,pz-cos*distance-sin*shoulder);
+    this.camera.lookAt(px+sin*ahead,py,pz+cos*ahead);
+    if(this.camera===this.flightCamera){
+      this.flightCamera.fov=43+6*a;
+      this.flightCamera.updateProjectionMatrix();
+    }
+    this.camera.updateMatrixWorld();
+  }
   render(game,dt,options={}){
     // Update shared actors first; presentation can be supplied by an art renderer.
     this.camera=this.flatCamera;super.render(game,dt,{...options,deferRender:true});
@@ -40,21 +66,22 @@ export class LivingWorld extends OceanScene {
         this.spines.forEach((m,i)=>{const b=this.body[i*2];if(b&&m.visible)m.position.copy(b.position).add(new THREE.Vector3(0,b.scale.y*.93,0));});
         this.feet.children.forEach((m,i)=>{const q=spine[i<2?3:Math.min(8,spine.length-1)];if(q)m.position.y=q.y+rise-.2;});
         if(this.character){this.player.visible=false;this.body.forEach(m=>m.visible=false);this.spines.forEach(m=>m.visible=false);this.feet.visible=false;
-          this.character.update({stage:game.stage,position:{x:p.x,y:p.y+rise,z:p.z},heading:p.angle,spine,length:p.body,density:p.density,organs:game.organs(),casting:{wind:game.pose.wind,s:game.pose.s,ring:game.pose.ring},hurt:p.invul>0,ascending:game.status==='ascending'},dt);}
+          this.character.update({stage:game.form,position:{x:p.x,y:p.y+rise,z:p.z},heading:p.angle,spine,length:p.body,density:p.density,organs:game.organs(),casting:{wind:game.pose.wind,s:game.pose.s,ring:game.pose.ring},hurt:p.invul>0,ascending:game.status==='ascending'},dt);}
       }
-      for(const e of game.enemies){const m=this.enemyMeshes.get(e.id);if(m){m.position.y=e.y-.6;if(m.children[0])m.children[0].visible=e.y<2;}}
+      if(!this.isInk)for(const e of game.enemies){const m=this.enemyMeshes.get(e.id);if(m){m.position.y=e.y-.6;if(m.children[0])m.children[0].visible=e.y<2;}}
       for(const e of game.shots){const m=this.shotMeshes.get(e.id);if(m)m.position.y=e.y;}
       for(const e of game.hazards){const m=this.hazardMeshes.get(e.id);if(m)m.position.y=e.y;}
       for(const m of this.zoneMeshes.values())m.visible=false;
       if(!this.isInk && game.stage>=2){const dummy=this.dummy;game.food.slice(0,700).forEach((f,i)=>{const size=.12+f.rank*.045;dummy.position.set(f.x,f.y+Math.sin(this.t*2+f.phase)*.1,f.z);dummy.rotation.set(0,this.t*.8+f.phase,Math.PI/4);dummy.scale.set(size,size*1.4,size);dummy.updateMatrix();this.foodMesh.setMatrixAt(i,dummy.matrix);});this.foodMesh.instanceMatrix.needsUpdate=true;this.foodGlow.visible=false;}else this.foodGlow.visible=true;
     }else this.lastHeight=0;
-    if(!this.isInk && this.flight>.005){
-      const c=this.flightCamera,a=this.flight;c.aspect=innerWidth/innerHeight;c.position.set(this.center.x+5*a,30*(1-a)+(p.y+12)*a,this.center.z+25*(1-a)+21*a);c.lookAt(this.center.x,p.y*a,this.center.z-1);c.fov=43+6*a;c.updateProjectionMatrix();this.camera=c;this.scene.fog.color.set(game.stage>=3?'#8b9db0':'#a8c8c4');this.scene.fog.near=45;this.scene.fog.far=115;this.dome.position.set(p.x,0,p.z);
+    if(!this.isInk&&!menu)this.followPlayer(game,dt);
+    if(!this.isInk&&!menu&&this.flight>.005){
+      this.scene.fog.color.set(game.stage>=3?'#8b9db0':'#a8c8c4');this.scene.fog.near=45;this.scene.fog.far=115;this.dome.position.set(p.x,0,p.z);
       this.water.material.uniforms.uStage.value=game.stage+this.flight*2;
-    }else{this.camera=this.flatCamera;this.scene.fog.color.set('#63b8aa');}
+    }else this.scene.fog.color.set('#63b8aa');
     if(!this.bossShield){this.bossShield=new THREE.Mesh(new THREE.IcosahedronGeometry(3,1),new THREE.MeshBasicMaterial({color:'#a3ddfa',wireframe:true,transparent:true,opacity:.3,depthWrite:false}));this.scene.add(this.bossShield);}this.bossShield.visible=!!game.boss?.shield;if(game.boss){this.bossShield.position.set(game.boss.x,game.boss.y+1,game.boss.z);this.bossShield.rotation.y=this.t*.3;}
-    this.fadeOccluders(game,dt);this.practiceGuide.visible=!!game.practice&&!game.marketTrial;this.practiceGuide.children.forEach((line,i)=>line.visible=i===(game.practiceStep===1?1:0));
+    this.fadeOccluders(game,dt);this.practiceGuide.visible=!!game.practice;this.practiceGuide.children.forEach((line,i)=>line.visible=i===(game.practiceStep===1?1:0));
     this.dome.material.uniforms.phase.value=game.stage>=3?1:0;this.dome.material.uniforms.time.value=this.t;this.flashLight.intensity=Math.max(0,this.flashLight.intensity-dt*3);this.combat.nodes.visible=!menu;this.combat.update(game,dt);this.present(game,dt,options);
   }
-  reset(){super.reset();this.combat?.reset();this.character?.reset?.();this.flight=0;this.lastHeight=0;}
+  reset(){super.reset();this.combat?.reset();this.character?.reset?.();this.flight=0;this.viewYaw=null;this.lastHeight=0;}
 }

@@ -1,7 +1,17 @@
-import { Interface, inkGlyph } from './ui.js';
+import './ending-ui.css';
+import './wonder-ui.css';
+import { Interface, clock, inkGlyph } from './ui.js';
 import { LESSONS } from './training.js';
-import { UPGRADES } from './model.js';
+import { STAGES, UPGRADES } from './model.js';
 import { FAMILIES, STARTERS, TECHNIQUE_BY_ID, TIER_NAMES, techniqueStats } from './cultivation-data.js';
+import { renderMarketChoices } from './market-choice-view.js';
+import { CASCADE_CARDS, CASCADE_DOCTRINES, dragonArtFoundation, dragonArtPairing } from './market-choices.js';
+import { DRAGON_ARTS, DRAGON_ART_DOCTRINES, dragonArtActivation } from './dragon-art-data.js';
+import { atlasSites, drawJourneyAtlas } from './journey-atlas.js';
+import { wonderTitle } from './wonders.js';
+import { OATHS } from './wonder-oaths.js';
+import { WILD_RELICS } from './wonder-wild.js';
+import { leaderboardEntry, leaderboardPanel, mountLeaderboard } from './leaderboard-ui.js';
 
 const families=Object.fromEntries(FAMILIES.map(family=>[family.id,family.name]));
 const elementMark={water:'bubble',thunder:'lightning',fire:'fire',poison:'poison'};
@@ -17,7 +27,62 @@ const comparisonMetrics=[
   {id:'cooldown',label:'出招',text:intervalText,measure:value=>1/value},
   reachMetric,
 ];
-const offerMetrics=comparisonMetrics.slice(0,2);
+
+const ENDINGS = {
+  locked: { name: '锁龙', stamp: '囚', line: '天锁未断，鱼群在湖闸前掉了头。' },
+  ordained: { name: '受封', stamp: '敕', line: '封神榜写下「司雨应龙」。第一场雨归于苇汀。' },
+  'dragon-king': { name: '龙王归来', stamp: '破', line: '天锁坠海，湖口鱼群再度洄游。' },
+};
+
+const GATE_CONTROL_PHASES = new Set(['approach', 'trial', 'choice', 'blessing']);
+const GATE_DASH_PHASES = new Set(['trial', 'choice']);
+
+const wonderNames={whirlpool:'涡',sword:'剑',pigment:'墨',palm:'掌',gates:'门',crane:'鹤',carp:'鲤',spring:'潮',oath:'契',wild:'阵'};
+const directions=['前','右前','右','右后','后','左后','左','左前'];
+const directionArrows=['↑','↗','→','↘','↓','↙','←','↖'];
+const bearingTo=(player,x,z)=>player.angle-Math.atan2(x-player.x,z-player.z);
+const bearingIndex=angle=>(Math.round(angle/(Math.PI/4))%8+8)%8;
+const drillGrades={gold:'金印',silver:'银印',bronze:'铜印'};
+
+function wonderStats(game){
+  const metrics=game.wonders?.metrics;
+  return metrics?.discovered?`<div><dt>渡过奇遇</dt><dd>${metrics.completed}</dd></div>
+    <div><dt>寻得宝物</dt><dd>${metrics.relics}</dd></div>`:'';
+}
+
+function gateInstruction(finale, touch, height) {
+  if (!finale) return [];
+  const { phase, warning, hits, trialStep, cracked, roofLine, stompReady, stompArmed } = finale;
+  const lift = touch ? '↑ / ↓' : 'W / S';
+  const dash = touch ? '点破浪' : '按空格';
+  if (phase === 'approach') return ['南天门', touch ? '摇杆左右转向 · ↑ / ↓ 升降' : 'A / D 转向 · W / S 升降'];
+  if (phase === 'trial') {
+    if (warning?.kind === 'layers') {
+      const [lower, upper]=warning.layers??[];
+      if(lower&&height<=lower.y+lower.halfHeight) return ['上下两重雷', touch?'按住 ↑，飞到两层之间':'按 W 升高，飞到两层之间', true];
+      if(upper&&height>=upper.y-upper.halfHeight) return ['上下两重雷', touch?'按住 ↓，飞到两层之间':'按 S 下降，飞到两层之间', true];
+      return ['上下两重雷', '保持在两层之间'];
+    }
+    if (warning?.kind === 'lock' && !warning.locked) return ['天雷追来', '等雷圈停住，再离开落点', true];
+    if (warning?.kind === 'lock') return ['雷圈已定', `侧转，${dash}冲出雷圈`, true];
+    if (hits === 1) return ['龙尾已伤', trialStep===0 ? '避开下一道门雷' : '稳住龙身，等天门打开', true];
+    if (!trialStep) return ['南天门', `用 ${lift} 调整飞行高度`];
+    return [];
+  }
+  if (phase === 'choice') {
+    if (stompArmed) return ['踏碎南天门', touch ? '点破浪落爪' : '按空格落爪', true];
+    if (stompReady) return ['对准门闩', touch ? '按 ↓ 俯冲，再点破浪' : '按 S 俯冲，再按空格', true];
+    if (roofLine) return ['门楼上方', touch
+      ? '飞到裂口上方，按 ↓ 俯冲，再点破浪'
+      : '飞到裂口上方，按 S 俯冲，再按空格'];
+    if (cracked) return ['正门已开', '对准正门受封，或靠近侧风飞上门楼'];
+    if (height>finale.threshold.y+2.4) return ['正门已开', touch?'按 ↓，降到门洞的高度':'按 S，降到门洞的高度'];
+    if (height<finale.threshold.y-2.4) return ['正门已开', touch?'按 ↑，升到门洞的高度':'按 W，升到门洞的高度'];
+    return ['正门已开', '对准门洞，就会自动飞入内庭'];
+  }
+  if (phase === 'blessing') return ['司雨应龙', '可继续转向与升降'];
+  return [];
+}
 
 function metricMeasure(metric,value){return metric.measure?metric.measure(value):value;}
 function metricValue(metric,stats){return metric.value?metric.value(stats):stats[metric.id];}
@@ -49,302 +114,37 @@ function techniqueComparison(stats,scale,label='法门数值对照'){
   </dl>`;
 }
 
-function techniqueIdentity(item,withDescription=true){
-  const {def,tier}=item;
-  const grade=TIER_NAMES[tier-1]??`${tier} 阶`;
-  const glyph=`<span class="market-glyph element-${techniqueMark(def)??'ring'}" aria-hidden="true">${inkGlyph(techniqueMark(def),def.icon)}</span>`;
-  const text=`<div class="market-item-text">
-      <small>${grade} · ${families[def.family]??'法门'}${item.temperName?` · ${item.temperName}`:''}</small>
-      <h4>${def.name}</h4>${withDescription?`<p>${def.desc}</p>`:''}
-    </div>`;
-  return `${glyph}${text}`;
-}
-
-function equippedTechnique(slot){
-  return `${techniqueIdentity(slot,false)}${equippedMeasures(slot)}`;
-}
-
-function equippedMeasures(slot){
-  return `<dl class="market-slot-measures" aria-label="随身法门数值">
-      ${comparisonMetrics.map(metric=>`<div><dt>${metricLabel(metric,slot.stats)}</dt><dd>${metric.text(metricValue(metric,slot.stats))}</dd></div>`).join('')}
-    </dl>`;
-}
-
-function offerTrait({def},stats){
-  if(def.kind==='arc')return `连锁 ${stats.chain} 敌`;
-  if(def.kind==='melee')return '近身破甲';
-  if(def.kind==='pulse')return def.element==='water'?'浸湿近敌':'扫开近敌';
-  if(def.field==='storm')return '风眼聚敌';
-  if(def.field==='rain')return '落雨铺湿';
-  if(def.field==='fire')return '留火灼敌';
-  if(def.field==='poison')return '毒沼蚀敌';
-  if(def.field==='thunder')return '雷云蓄电';
-  if(stats.projectiles>1)return `扇射 ${stats.projectiles} 枚`;
-  if(stats.pierce>1)return `贯穿 ${stats.pierce} 敌`;
-  return def.element==='water'?'水珠浸湿':'';
-}
-
-function rangeTag(stats){
-  return `${reachMetric.label(stats)} ${distanceText(reachMetric.value(stats))}`;
-}
-
-function offerTag(item,index,selected,view,scale){
-  if(!item)return '<div class="market-empty">已取</div>';
-  const {offer,preview,stats}=item;
-  const {def,price,tier}=offer;
-  const completes=preview.ok&&preview.view.sets.some(set=>set.id===def.family&&set.count===2)&&
-    view.sets.some(set=>set.id===def.family&&set.count===1);
-  const active=selected===index;
-  const glyph=techniqueMark(def)??'ring';
-  return `<button class="market-inspect" data-action="marketInspect:${index}" aria-controls="market-offer-detail"
-    aria-pressed="${active}" data-blocked="${!offer.canBuy}" data-lock="${offer.locked}">
-    <span class="market-glyph element-${glyph}" aria-hidden="true">${inkGlyph(techniqueMark(def),def.icon)}</span>
-    <span class="market-tag-title"><small>${families[def.family]}${tier>1?` · ${TIER_NAMES[tier-1]}`:''}</small><strong>${def.name}</strong></span>
-    <span class="market-tag-price" aria-label="${price} 灵材">${price}</span>
-    <span class="market-tag-metrics">
-      ${offerMetrics.map(metric=>`<span class="market-tag-metric" data-metric="${metric.id}">
-        <small>${metric.label}</small><b>${metric.text(stats[metric.id])}</b>${comparisonTrack(metricMeasure(metric,stats[metric.id]),scale[metric.id])}
-      </span>`).join('')}
-    </span>
-    <span class="market-tag-foot"><b class="market-tag-range">${rangeTag(stats)}</b><span class="market-tag-trait">${offerTrait(offer,stats)}</span></span>
-    <span class="market-tag-state">${offer.locked?'已保留':completes?`成${families[def.family]}两件`:''}</span>
-  </button>`;
-}
-
-function offerDetails(item,index,scale,view,canTry,expanded=false){
-  if(!item)return '';
-  const {offer,preview,stats}=item;
-  const outcome=offerOutcome(view,offer,preview);
-  return `<article class="market-item market-offer-detail" id="market-offer-detail" aria-label="${offer.def.name}详情">
-    ${techniqueIdentity({...offer,tier:preview.weapon?.tier??offer.tier})}
-    ${outcome?`<p class="market-outcome" id="market-offer-outcome">${outcome}</p>`:''}
-    <details class="market-offer-stats" ${expanded?'open':''}>
-      <summary>法门数值</summary>
-      ${techniqueComparison(stats,scale,preview.ok?'购入后的法门数值':'法门数值对照')}
-    </details>
-    <div class="market-offer-action-slot">${offerActions(item,index,canTry,Boolean(outcome))}</div>
-  </article>`;
-}
-
-function purchaseDetails(slot,receipt){
-  return `<article class="market-item market-purchase-detail" id="market-offer-detail" aria-label="${slot.def.name}已购入">
-    ${equippedTechnique(slot)}
-    ${receipt.changes?`<p class="market-outcome">${receipt.changes}</p>`:''}
-    <div class="market-item-actions">
-      <button class="secondary" data-action="marketPurchased">随身法门 ↘</button>
-    </div>
-  </article>`;
-}
-
-function offerActions(item,index,canTry,hasOutcome){
-  const {offer,preview}=item;
-  const verb=offer.fusionUid!=null?'合成':'购入';
-  const block=offer.affordable?'法门已满':'灵材不足';
-  return `<div class="market-item-actions market-offer-actions" role="group" aria-label="${offer.def.name}">
-      <span class="market-action-name" aria-hidden="true">${offer.def.name}</span>
-      <button class="secondary" data-action="marketLock:${index}" aria-pressed="${offer.locked}">${offer.locked?'已保留':'保留'}</button>
-      ${canTry?`<button class="secondary market-try-action" data-action="marketTry:${index}" ${preview.ok?'':'disabled'}>试法</button>`:''}
-      <button class="primary" data-action="marketBuy:${index}" ${offer.canBuy?'':'disabled'}
-        ${hasOutcome?'aria-describedby="market-offer-outcome"':''}
-        ${offer.fusionUid!=null&&offer.canBuy?`aria-label="花费 ${offer.price} 灵材购入并合成${offer.def.name}"`:''}>
-        <span class="brush-label">${offer.canBuy?verb:block}</span> <b>${offer.price}</b>
-      </button>
-    </div>`;
-}
-
-const linkRules=[
-  {name:'潮雷传导',hint:'雷击湿敌，传得更远',match:defs=>defs.some(def=>def.element==='water')&&defs.some(def=>def.kind==='arc')},
-  {name:'合流成涡',hint:'水面雨阵与风眼重叠时，湿敌被拉得更快',match:defs=>defs.some(def=>def.field==='rain')&&defs.some(def=>def.field==='storm')},
-  {name:'火水成云',hint:'火碰湿敌可生云汽',match:defs=>defs.some(def=>def.element==='water')&&defs.some(def=>def.element==='fire')},
-  {name:'毒风聚煞',hint:'风眼卷入毒雾',match:defs=>defs.some(def=>def.field==='storm')&&defs.some(def=>def.element==='poison')},
-  {name:'炎舞风暴',hint:'风眼卷入火场',match:defs=>defs.some(def=>def.field==='storm')&&defs.some(def=>def.field==='fire')},
-  {name:'尾扫推敌',hint:'摆尾击退潮湿杂兵更远',match:defs=>defs.some(def=>def.id==='tail')&&defs.some(def=>def.element==='water')},
-];
-
-function weaponLinks(view){
-  const defs=view.slots.flatMap(slot=>slot?[slot.def]:[]);
-  return linkRules.filter(rule=>rule.match(defs));
-}
-
-function changedEffects(before,after){
-  const gains=[],losses=[];
-  const current=weaponLinks(before),next=weaponLinks(after);
-  for(const [index,set] of before.sets.entries()){
-    set.thresholds.forEach((threshold,i)=>{
-      const active=after.sets[index].thresholds[i].active;
-      if(active!==threshold.active){
-        (active?gains:losses).push({name:`${set.name} ${threshold.at} 件`,hint:threshold.desc,threshold:true});
-      }
-    });
-  }
-  gains.push(...next.filter(rule=>!current.includes(rule)));
-  losses.push(...current.filter(rule=>!next.includes(rule)));
-  return {gains,losses};
-}
-
-function changeMarks({gains,losses},detail=false){
-  return [
-    ...gains.map(effect=>`<span class="market-change" data-direction="gain"><b>${effect.threshold?'启':'可联'} ${effect.name}</b>${detail?` <span>${effect.hint}</span>`:''}</span>`),
-    ...losses.map(effect=>`<span class="market-change" data-direction="loss"><b>失 ${effect.name}</b>${detail?` <span>${effect.hint}</span>`:''}</span>`),
-  ].join('');
-}
-
-function setLedger(sets){
-  return `<ul class="market-sets" aria-label="法门套组">
-    ${sets.map(set=>`<li>
-      <div class="market-set-progress"><b>${set.name}</b>
-        <span class="market-set-strokes" aria-hidden="true">${Array.from({length:set.thresholds.at(-1).at},(_,i)=>
-          `<i data-lit="${i<set.count}"></i>`).join('')}</span>
-        <small>${set.count} 件</small>
-      </div>
-      <p>${set.thresholds.filter(threshold=>threshold.active||threshold===set.next).map(threshold=>
-        `<span class="market-set-effect" data-active="${threshold.active}"><b>${threshold.active?'已成':'下阶'} ${threshold.at} 件</b> ${threshold.desc}</span>`).join('')}</p>
-    </li>`).join('')}
-  </ul>`;
-}
-
-function offerOutcome(view,offer,preview){
-  const before=view.sets.find(set=>set.id===offer.def.family);
-  const after=preview.ok?preview.view.sets.find(set=>set.id===before?.id):before;
-  const advances=after?.count>before?.count;
-  const completes=advances&&before.next&&after.count>=before.next.at;
-  const next=!completes&&after?.next
-    ?`<span class="market-set-next"><b>${after.name}</b> ${after.count} / ${after.next.at} 件</span>`:'';
-  const changed=preview.ok?changeMarks(changedEffects(view,preview.view),true):'';
-  const fusion=preview.fused?`<span class="market-change"><b>升 ${TIER_NAMES[preview.weapon.tier-1]}</b></span>`:'';
-  return [next,fusion,changed].filter(Boolean).join(' ');
-}
-
-function fusionLine(old,upgraded){
-  return `${TIER_NAMES[old.tier-1]} → ${TIER_NAMES[upgraded.tier-1]} · 威力 ×${old.stats.power.toFixed(2)} → ×${upgraded.stats.power.toFixed(2)}`;
-}
-
-const temperMetrics=[comparisonMetrics[0],{...comparisonMetrics[1],label:'间隔'},
-  {id:'range',label:'射程',text:distanceText},
-  {id:'radius',label:'范围',text:value=>`${value.toFixed(1)} 丈`},
-  {id:'life',label:'持续',text:value=>`${value.toFixed(1)} 秒`},
-  {id:'pierce',label:'贯穿',text:value=>String(value)},
-  {id:'projectiles',label:'每息枚数',text:value=>String(value)},
-  {id:'chain',label:'连锁目标',text:value=>String(value)},
-  {id:'energy',label:'雷云蓄电',text:value=>value.toFixed(1)},
-];
-
-function temperPanel(slot){
-  return `<div class="market-ledger market-temper" aria-label="${slot.def.name}的淬炼分支">
-    <h3>${slot.def.name} <small>${TIER_NAMES[slot.tier-1]} · 每件限选一次</small></h3>
-    <div class="market-temper-grid">
-      ${slot.tempering.map(form=>{
-        const changes=temperMetrics.filter(metric=>Math.abs(slot.stats[metric.id]-form.stats[metric.id])>.001);
-        return `<article class="market-temper-card">
-          <h4>${form.name}</h4>
-          ${form.stats.wetBranch?'<p class="market-temper-note">湿敌分出一道半威力支雷</p>':
-            form.stats.sideBreak?'<p class="market-temper-note">侧后击中蟹王、龙龟可短暂破甲</p>':
-            form.stats.wetSweep?'<p class="market-temper-note">推开外半圈已经潮湿的敌人</p>':
-            form.stats.tailVortex?'<p class="market-temper-note">风眼落在尾段，将近敌卷入尾扫范围</p>':''}
-          <dl>${changes.map(metric=>`<div><dt>${metric.label}</dt><dd>${metric.text(slot.stats[metric.id])} → ${metric.text(form.stats[metric.id])}</dd></div>`).join('')}</dl>
-          <div class="market-item-actions">
-            <button class="secondary" data-action="marketTemperTry:${slot.uid},${form.id}" ${form.affordable?'':'disabled'}>试法</button>
-            <button class="primary" data-action="marketTemper:${slot.uid},${form.id}" ${form.affordable?'':'disabled'}><span class="brush-label">淬炼</span> <b>${form.price}</b></button>
-          </div>
-        </article>`;
-      }).join('')}
-    </div>
-  </div>`;
-}
-
-function tradeReceipt(before,after,operation,result){
-  if(!result.ok)return {title:result.message??'交易未成',text:'',changes:'',error:true};
-  if(operation==='reroll')return {title:'已换一批',text:`−${result.price} 灵材`,changes:''};
-  if(operation==='temper'&&result.weapon){
-    const slot=after.slots.find(item=>item?.uid===result.weapon.uid);
-    return {title:`淬炼 · ${slot?.temperName??slot?.def.name??'法门'}`,text:`−${result.price} 灵材`,changes:''};
-  }
-  if(!result.weapon||!['buy','merge','sell'].includes(operation))return null;
-  const name=TECHNIQUE_BY_ID[result.weapon.id].name;
-  const label=operation==='sell'?'售出':operation==='merge'||result.fused?'合成':'购入';
-  const old=before.slots.find(slot=>slot?.uid===result.weapon.uid);
-  const upgraded=after.slots.find(slot=>slot?.uid===result.weapon.uid);
-  const text=label==='合成'&&old&&upgraded?`${fusionLine(old,upgraded)}${result.fused?` · −${result.price} 灵材`:''}`
-    :`${operation==='sell'?'+':'−'}${result.price} 灵材`;
-  return {title:`${label} · ${name}`,text,changes:changeMarks(changedEffects(before,after),true),
-    weaponUid:operation==='sell'?null:result.weapon.uid};
-}
-
-function trialSummary(result){
-  if(!(result?.targets>0))return '';
-  return [
-    `命中 ${result.targets} 靶`, `最重 ${Math.round(result.strongest)}`,
-    result.pushed>0?`推开 ${result.pushed} 靶`:'',
-    result.branch>0?`支雷 ${Math.round(result.branch)}`:'',
-  ].filter(Boolean).join(' · ');
-}
-
-function trialMatches(action,game,practice){
-  const trial=practice?.marketTrial;
-  if(!trial)return false;
-  const [route,value]=action?.split(':')??[];
-  if(route==='marketTry')return game.cultivation.offers[Number(value)]?.id===trial.weapon;
-  if(route!=='marketTemperTry')return false;
-  const [uid,form]=value.split(',');
-  return Number(uid)===trial.weaponUid&&practice.cultivation.weapons.some(weapon=>weapon.uid===trial.weaponUid&&weapon.temper===form);
-}
-
 export class LivingInterface extends Interface {
   constructor(root,actions){
     const routes={...actions};
     super(root,routes);
     routes.starterChoice=()=>this.starters();
-    routes.marketInspect=index=>this.inspectOffer(Number(index));
-    routes.marketPurchased=()=>{
-      const uid=this.marketRecord?.purchaseUid;
-      const summary=uid!=null?this.root.querySelector(`.market-slot-card[data-uid="${uid}"] summary`):null;
-      if(!summary)return;
-      summary.scrollIntoView({block:'nearest'});
-      summary.focus({preventScroll:true});
-    };
-    root.addEventListener('keydown',event=>this.offerKeyboard(event));
-    this.shortMarket=matchMedia('(min-width: 651px) and (max-height: 660px)');
-    this.narrowMarket=matchMedia('(max-width: 650px)');
-    this.shortMarket.addEventListener('change',()=>this.placeOfferActions());
-    this.narrowMarket.addEventListener('change',()=>{
-      if(this.overlayType==='market'&&this.marketRecord)this.market(this.marketRecord.game);
-    });
-    for(const action of ['marketTry','marketTemperTry']){
-      if(!actions[action])continue;
-      routes[action]=value=>{
-        const record=this.marketRecord;
-        const modal=this.root.querySelector('.market-modal');
-        if(record&&modal){
-          if(record.receipt?.kind==='trial')record.receipt=null;
-          record.trialAction=`${action}:${value}`;
-          record.scrolls[modal.dataset.page]=modal.querySelector('.market-ledger').scrollTop;
-          if(modal.dataset.page==='offers')record.statsOpen=Boolean(modal.querySelector('.market-offer-stats[open]'));
-        }
-        actions[action](value);
-      };
-    }
-    routes.marketBlessings=()=>{
-      const record=this.marketRecord;
-      if(!record?.game.choices.length)return;
-      if(record.receipt?.kind==='trial')record.receipt=null;
-      record.blessings=!record.blessings;
-      record.temperUid=null;
-      this.market(record.game);
-    };
-    routes.marketTemperOptions=value=>{
-      const record=this.marketRecord;
-      if(this.overlayType!=='market'||!record)return;
-      if(record.receipt?.kind==='trial')record.receipt=null;
-      const uid=Number(value);
-      record.temperUid=record.temperUid===uid?null:uid;
-      record.blessings=false;
-      this.market(record.game);
-    };
+    routes.leaderboard=()=>this.openLeaderboard();
+    routes.closeLeaderboard=()=>this.closeLeaderboard();
   }
   menu(save){
+    this.leaderboardResult=null;
+    this.seaDrillBest=save.seaDrillBest;
     super.menu(save);
     const buttons=this.root.querySelector('.title-buttons');
-    buttons.insertAdjacentHTML('beforeend','<button class="secondary" data-action="starterChoice">择法</button><button class="secondary help-entry" data-action="help">招式图鉴</button>');
+    buttons.insertAdjacentHTML('beforeend','<button class="secondary" data-action="starterChoice">择法</button><button class="secondary help-entry" data-action="help">招式图鉴</button>'+leaderboardEntry());
+  }
+  openLeaderboard(){
+    const result=this.overlayType==='result'?this.leaderboardResult:null;
+    this.leaderboardReturn=result;
+    this.overlay(leaderboardPanel(result?.score),'leaderboard');
+    mountLeaderboard(this.root.querySelector('.leaderboard-modal'),result?.score,result?.submission);
+  }
+  closeLeaderboard(){
+    if(this.overlayType!=='leaderboard')return;
+    const result=this.leaderboardReturn;
+    this.leaderboardReturn=null;
+    if(!result){
+      this.overlay('','');
+      return;
+    }
+    this.result(result.game,result.reward,result.score);
+    this.root.querySelector('.result-modal [data-action="leaderboard"]')?.focus({preventScroll:true});
   }
   starters(){
     const choices=STARTERS.map(id=>({id,def:TECHNIQUE_BY_ID[id],stats:techniqueStats({id,tier:1})}));
@@ -367,27 +167,67 @@ export class LivingInterface extends Interface {
         <button class="text-button" data-action="close">返回苇汀</button>
       </div>`,'starter');
   }
+  journeySeed(seed){
+    this.overlay(`<section class="modal journey-seed">
+      <h2>指定山海</h2>
+      <label for="journey-seed">地图种子</label>
+      <input id="journey-seed" type="text" inputmode="numeric" maxlength="10" value="${seed??''}" placeholder="例如 321">
+      <button class="primary" data-action="startSeed">按种子出发</button>
+      <button class="text-button" data-action="close">返回苇汀</button>
+    </section>`,'journey-seed');
+    const input=this.root.querySelector('#journey-seed');
+    input.focus();
+    input.addEventListener('input',()=>input.setCustomValidity(''));
+    input.addEventListener('keydown',event=>{
+      if(event.key==='Enter'){event.preventDefault();this.actions.startSeed();}
+    });
+  }
   hud(g,save){
-    const record=this.marketRecord;
-    if(g.status==='market'&&record?.game===g&&trialMatches(record.trialAction,g,this.activeRun)){
-      const finished=this.activeRun.marketTrial;
-      const text=trialSummary(finished.result);
-      if(text)record.receipt={title:`试法 · ${finished.name}`,text,kind:'trial'};
-    }
-    this.introControls=!g.practice && !g.marketTrial && save.runs===0 && !this.controlsSeen;
+    this.leaderboardResult=null;
+    this.introControls=!g.practice && !this.controlsSeen;
     this.controlsSeen ||= this.introControls;
-    this.introOrigin=this.introControls?{x:g.p.x,z:g.p.z}:null;
-    this.trialReadout=null;
     super.hud(g,save);
-    if(g.marketTrial){
-      this.root.querySelector('.hud').insertAdjacentHTML('beforeend',`
-        <aside class="market-trial-hud" aria-label="试法">
-          <span class="market-trial-name">试法 · ${g.marketTrial.name}</span>
-          <button class="secondary" data-action="marketTrialExit">返回集市 ↗</button>
-          <p class="market-trial-result" role="status" aria-live="polite" aria-atomic="true" hidden></p>
-        </aside>`);
-      this.trialReadout=this.root.querySelector('.market-trial-result');
-    }else if(g.practice){
+    this.hudElement.insertAdjacentHTML('beforeend', `
+      <p class="ending-clue" id="ending-clue" aria-live="polite" hidden></p>
+      <progress class="ending-tide" id="ending-tide" max="1" aria-label="海闸蓄潮" hidden></progress>
+      <div class="gate-instruction" id="gate-instruction" aria-live="polite" hidden>
+        <strong class="brush-label"></strong><span></span>
+      </div>
+      <aside class="wonder-guide" id="wonder-guide" hidden>
+        <i class="wonder-stamp" aria-hidden="true"></i>
+        <div>
+          <div class="wonder-heading"><strong class="brush-label"></strong><span class="wonder-bearing" hidden><i aria-hidden="true">↑</i><span></span></span></div>
+          <p></p>
+          <progress max="1" aria-label="奇遇进度" hidden></progress>
+          <small class="wonder-alternate" hidden></small>
+          <button class="interactive wonder-enter" type="button" data-action="startWild" hidden>开启镇潮阵 <kbd>E</kbd></button>
+        </div>
+      </aside>
+      <aside class="passage-guide" id="passage-guide" hidden>
+        <strong class="brush-label"></strong><span></span>
+      </aside>
+      <p class="wonder-charge" id="wonder-charge" hidden>玄镜蓄满 · 下次破浪返射</p>
+      <p class="investiture-announcement" id="investiture-announcement" role="status"></p>`);
+    this.endingClue=this.root.querySelector('#ending-clue');
+    this.gateNotice=this.root.querySelector('#gate-instruction');
+    const wonder=this.root.querySelector('#wonder-guide');
+    this.wonderNotice={root:wonder,stamp:wonder.querySelector('.wonder-stamp'),title:wonder.querySelector('strong'),
+      detail:wonder.querySelector('p'),progress:wonder.querySelector('progress'),bearing:wonder.querySelector('.wonder-bearing'),
+      alternate:wonder.querySelector('.wonder-alternate'),enter:wonder.querySelector('.wonder-enter')};
+    this.investitureAnnouncement=this.root.querySelector('#investiture-announcement');
+    this.touchGate=matchMedia('(pointer:coarse)');
+    if(g.drill)this.hudElement.insertAdjacentHTML('beforeend',`
+      <aside class="drill-status">
+        <strong class="brush-label">沧溟兽潮</strong><span id="drill-time"></span><span id="drill-kills"></span>
+        <div class="drill-body"><span>龙躯</span><meter min="0" max="1" aria-label="剩余龙躯"></meter></div>
+        <span id="drill-surge" hidden></span>
+      </aside>`);
+    const dash=this.nodes.dash;
+    dash.className='gate-dash interactive';
+    dash.textContent='破浪';
+    dash.removeAttribute('tabindex');
+    dash.removeAttribute('aria-hidden');
+    if(g.practice){
       this.root.querySelector('.hud').classList.add('training-active');
       this.root.querySelector('.hud').insertAdjacentHTML('beforeend',`
         <section class="lesson-panel">
@@ -401,22 +241,219 @@ export class LivingInterface extends Interface {
     }
     this.update(g,true);
   }
-  update(g){
+  update(g, _chapterChanged, endingReveal){
     super.update(g);
     if(this.isMenu||!this.nodes)return;
     const el=id=>this.root.querySelector('#'+id);
-    if(this.introOrigin&&Math.hypot(g.p.x-this.introOrigin.x,g.p.z-this.introOrigin.z)>.85)this.introControls=false;
-    this.nodes.controls.hidden=!this.introControls||g.time>=6.5||g.stage!==0||g.status!=='playing';
+    const introFinished=g.time>=6.5||(g.hasSteered&&g.time>=2.5);
+    this.nodes.controls.hidden=!this.introControls||introFinished||g.stage!==0||g.status!=='playing';
     this.bossThreat(g);
-    if(this.trialReadout)this.updateTrialReadout(g);
-    if(g.practice&&el('lesson-title')){const step=g.practiceStep||0,lesson=LESSONS[step];el('lesson-title').textContent=`${step<3?'0'+(step+1)+' / 03 · ':''}${lesson.name}`;el('lesson-text').textContent=lesson.text;let hint=lesson.hint;if(step===0&&g.pose.wind>.2)hint=`同向蓄势 ${Math.floor(g.pose.wind*100)}% · 保持当前回旋方向。`;if(step===1&&g.pose.s>.2)hint=`已识别交替转向 ${Math.floor(g.pose.s*100)}% · 再做一个幅度清楚的反向弯道。`;if(step===2&&g.ring)hint='闭环已成立！现在向圆圈外游离，或把围合面积收紧，释放收阵爆发。';const distance=Math.hypot(g.p.x,g.p.z);if(step<3&&distance>8){const arrows=['↑','↗','→','↘','↓','↙','←','↖'],index=(Math.round(Math.atan2(-g.p.x,g.p.z)/(Math.PI/4))+8)%8;hint=`赭色路线在 ${arrows[index]} 方向约 ${Math.round(distance)} 丈，先返回练习区。`;}el('lesson-hint').textContent=hint;el('lesson-steps').textContent=['盘旋','S 形','收阵'].map((n,i)=>(step>i?'✓ ':'○ ')+n).join('   ·   ');}
+    this.updateEndings(g, endingReveal);
+    this.updateWonders(g);
+    this.updatePassage(g);
+    if(g.drill){
+      el('drill-time').textContent=g.drill.loading?'兽潮集结中':`尚余 ${clock(Math.max(0,Math.ceil(g.drill.duration-g.time)))}`;
+      el('drill-kills').textContent=g.drill.goal?`击退 ${g.kills} · 目标 ${g.drill.goal}`:`已击退 ${g.kills} / ${g.drill.count}`;
+      const body=this.hudElement.querySelector('.drill-body');
+      const remaining=Math.max(0,g.p.mass/Math.max(g.p.peakMass,1));
+      body.querySelector('meter').value=remaining;
+      body.dataset.low=String(remaining<.34);
+      const surge=g.drill.surgeNotice;
+      const warning=el('drill-surge');
+      const storm=g.drill.storm;
+      const inward=storm?directions[bearingIndex(bearingTo(g.p,storm.x,storm.z))]:'';
+      warning.hidden=g.status!=='playing'||!g.drill.strike&&!storm?.warning&&!storm?.outside&&(!surge||g.time>=surge.until);
+      if(!warning.hidden)warning.textContent=g.drill.strike?'潮雷锁定 · 变向或破浪':
+        storm?.outside?`逆浪伤身 · 朝${inward}方回游`:storm?.warning?`外潮逼近 · 朝${inward}方回游`:
+          `兽潮从${directions[bearingIndex(bearingTo(g.p,surge.x,surge.z))]}方追来`;
+    }
+    if(!this.endingClue.hidden)this.nodes.controls.hidden=true;
+    if(g.practice&&el('lesson-title')){const step=g.practiceStep||0,lesson=LESSONS[step];el('lesson-title').textContent=`${step<3?'0'+(step+1)+' / 03 · ':''}${lesson.name}`;el('lesson-text').textContent=lesson.text;let hint=lesson.hint;if(step===0&&g.pose.wind>.2)hint=`同向蓄势 ${Math.floor(g.pose.wind*100)}% · 保持当前回旋方向。`;if(step===1&&g.pose.s>.2)hint=`已识别交替转向 ${Math.floor(g.pose.s*100)}% · 再做一个幅度清楚的反向弯道。`;if(step===2&&g.ring)hint='已成阵。松开转向，直游出阵。';const distance=Math.hypot(g.p.x,g.p.z);if(step<3&&distance>8&&!(step===2&&g.ring)){const arrow=directionArrows[bearingIndex(bearingTo(g.p,0,0))];hint=`赭色路线在 ${arrow} 方向约 ${Math.round(distance)} 丈，先返回练习区。`;}el('lesson-hint').textContent=hint;el('lesson-steps').textContent=['盘旋','S 形','收阵'].map((n,i)=>(step>i?'✓ ':'○ ')+n).join('   ·   ');}
   }
-  updateTrialReadout(game){
-    const node=this.trialReadout;
-    const result=game.marketTrial?.result;
-    const text=result?.until>game.time?trialSummary(result):'';
-    if(node.textContent!==text)node.textContent=text;
-    if(node.hidden===Boolean(text))node.hidden=!text;
+  updatePassage(game){
+    const root=this.root.querySelector('#passage-guide');
+    const route=game.crossing?.stage===game.stage?game.crossing.notice:null;
+    root.hidden=game.status!=='playing'||!route||Boolean(game.boss);
+    if(root.hidden)return;
+    const {name,stage,aligned,height,x,z,distance}=route;
+    const compass=directions[bearingIndex(bearingTo(game.p,x,z))];
+    const near=stage==='through'&&aligned;
+    const heightText=height==='down'?(game.stage===2?'下降贴水':'下降到墨线'):
+      height==='up'?'抬升到墨线':'';
+    const approach=near?'保持航向，穿过通道':stage==='approach'?`${compass}方 ${Math.round(distance)} 丈绕到谷口`:
+      `${compass}方 ${Math.round(distance)} 丈 · 沿墨线入峡`;
+    const details=[approach,heightText,near?'回灵、续躯':'穿过可恢复龙躯'].filter(Boolean).join(' · ');
+    if(root.firstElementChild.textContent!==name)root.firstElementChild.textContent=name;
+    if(root.lastElementChild.textContent!==details)root.lastElementChild.textContent=details;
+  }
+  updateWonders(game){
+    const {root,stamp,title,detail,progress,bearing,alternate,enter}=this.wonderNotice;
+    const guide=game.wonders?.guide;
+    const relay=game.endingRoute?.mountainStrike;
+    const charge=this.root.querySelector('#wonder-charge');
+    charge.hidden=game.status!=='playing'||!game.wonders?.artifact?.charge;
+    root.hidden=game.status!=='playing'||!guide||guide.phase!=='active'&&(Boolean(game.boss)||Boolean(relay?.relay));
+    if(root.hidden)return;
+    enter.hidden=!guide.canStart;
+    const active=guide.phase==='active';
+    const danger=active&&(guide.kind==='palm'||guide.kind==='gates');
+    root.dataset.danger=String(danger);
+    root.dataset.active=String(active);
+    const mark=wonderNames[guide.kind]??'异';
+    if(stamp.textContent!==mark)stamp.textContent=mark;
+    if(title.textContent!==guide.title)title.textContent=guide.title;
+    const passage=guide.passage;
+    let instruction=guide.hint??'';
+    if(passage&&!passage.inside){
+      const height=game.p.y>passage.maxHeight?(game.stage===2?' · 下降贴水':' · 降到墨线'):
+        game.p.y<passage.minHeight?' · 抬升到墨线':'';
+      const approach=passage.stage==='approach'?'先绕到峡口外':'沿峡口两道墨线进入';
+      instruction=`${passage.name} · ${approach}${height}`;
+    }
+    if(detail.textContent!==instruction)detail.textContent=instruction;
+    const track=active&&Number.isFinite(guide.progress);
+    progress.hidden=!track;
+    if(track)progress.value=guide.progress;
+    const sideTrail=guide.alternate;
+    alternate.hidden=!sideTrail||active&&guide.kind!=='whirlpool';
+    if(!alternate.hidden){
+      const direction=directions[bearingIndex(bearingTo(game.p,sideTrail.x,sideTrail.z))];
+      const distance=Math.round(Math.hypot(sideTrail.x-game.p.x,sideTrail.z-game.p.z));
+      const text=`${direction}方 ${distance} 丈 · ${sideTrail.title}`;
+      if(alternate.textContent!==text)alternate.textContent=text;
+    }
+    bearing.hidden=active&&guide.kind!=='carp'&&guide.kind!=='oath';
+    if(!bearing.hidden){
+      const view=this.actions.projectWonder?.(guide);
+      const relative=bearingTo(game.p,guide.x,guide.z);
+      const direction=directions[bearingIndex(relative)];
+      const altitude=game.stage>0&&Math.abs(guide.heightDelta)>2?(guide.heightDelta>0?' · 上升':' · 下降'):'';
+      const label=`${view?.inView?'':`${direction} · `}${Math.max(1,Math.round(guide.distance))} 丈${altitude}`;
+      bearing.firstElementChild.hidden=Boolean(view?.inView);
+      bearing.firstElementChild.style.transform=`rotate(${view?.bearing??relative}rad)`;
+      if(bearing.lastElementChild.textContent!==label)bearing.lastElementChild.textContent=label;
+    }
+  }
+  updateEndings(game, endingReveal) {
+    const finale=game.stage===4 ? game.finale : null;
+    const active=game.status==='ascending'||game.status==='playing';
+    const phase=finale?.phase;
+    const gateControls=Boolean(active&&GATE_CONTROL_PHASES.has(phase));
+    const cinematic=Boolean(phase&&!GATE_CONTROL_PHASES.has(phase));
+    this.hudElement.dataset.gateControls=String(gateControls);
+    this.hudElement.dataset.gateCinematic=String(cinematic);
+    if(gateControls)this.nodes['flight-controls'].hidden=false;
+    const seaGateDash=game.stage===2&&game.status==='playing'&&game.endingRoute?.seaReady;
+    const gateDash=gateControls&&GATE_DASH_PHASES.has(phase);
+    const wonderDash=game.status==='playing'&&['spring','oath'].includes(game.wonders?.active?.kind);
+    const drillDash=game.status==='playing'&&game.drill;
+    this.nodes.dash.hidden=!(this.touchGate.matches&&(gateDash||seaGateDash&&Boolean(game.endingRoute.hint)||wonderDash||drillDash));
+    if(gateDash&&phase==='choice'&&finale.stompReady)this.nodes.dash.disabled=false;
+
+    const clue=game.status==='playing'&&!game.practice&&game.stage<4
+      ? endingReveal??game.endingRoute?.hint?.replace('按破浪',this.touchGate.matches?'点破浪':'按空格破浪') : '';
+    const relay=game.endingRoute?.mountainStrike;
+    const routeTitle=endingReveal==null&&clue
+      ? game.stage===2&&game.endingRoute?.seaReady?'潮头已聚'
+        : game.stage===3&&relay?.lockedAt!=null&&relay.relay?'雷锁铁环'
+        : game.stage===3&&relay&&relay.lockedAt==null?'引雷入环':''
+      : '';
+    this.endingClue.hidden=!clue||Boolean(routeTitle);
+    if(clue&&this.endingClue.textContent!==clue)this.endingClue.textContent=clue;
+    const tide=this.root.querySelector('#ending-tide');
+    const charge=game.endingRoute?.seaCoil??0;
+    tide.hidden=game.stage!==2||!clue||endingReveal!=null||charge<.025||Boolean(routeTitle);
+    if(!tide.hidden)tide.value=charge;
+
+    const [title, detail, danger]=routeTitle?[routeTitle,clue,routeTitle==='雷锁铁环']
+      : active?gateInstruction(finale,this.touchGate.matches,game.p.y):[];
+    this.gateNotice.hidden=!title;
+    if(title){
+      if(this.gateNotice.firstElementChild.textContent!==title)this.gateNotice.firstElementChild.textContent=title;
+      if(this.gateNotice.lastElementChild.textContent!==detail)this.gateNotice.lastElementChild.textContent=detail;
+      this.gateNotice.dataset.danger=String(Boolean(danger));
+    }
+    const investiture=phase==='audience'&&finale.age>=finale.inscriptionAt ? '封神榜，司雨应龙。' : '';
+    if(this.investitureAnnouncement.textContent!==investiture)this.investitureAnnouncement.textContent=investiture;
+  }
+  pause(game=this.activeRun,save=null){
+    super.pause(game,save);
+    const ledger=this.root.querySelector('.pause-record');
+    ledger.insertAdjacentHTML('beforeend',wonderStats(game));
+    if(game.exploring)this.root.querySelector('.pause-exits').insertAdjacentHTML('beforebegin',
+      '<button class="secondary" data-action="atlas">游历图</button>');
+  }
+  atlas(game){
+    const sites=atlasSites(game);
+    const waypoint=game.wonders.waypoint;
+    this.overlay(`<section class="modal journey-atlas">
+      <h2>游历图</h2>
+      <p>${STAGES[game.stage].realm} · 已绘 ${game.atlas?.chapters[game.stage]?.chart??0} 方水土</p>
+      <canvas width="300" height="300" role="img" aria-label="已绘地势、近途和奇遇的位置"></canvas>
+      <div class="journey-legend"><span>△ 龙首</span><span>┄ 近途</span></div>
+      ${sites.length?`<div class="atlas-sites" aria-label="附近奇遇">${sites.map(({site,distance},index)=>`
+        <button class="secondary" data-action="markWonder:${index}" aria-pressed="${waypoint?.id===site.id}">
+          <span class="atlas-pin">${index+1}</span><span>${site.title??wonderTitle(site)}</span>
+          <small>${waypoint?.id===site.id?'追踪中':`${Math.max(1,Math.round(distance))} 丈`}${site.landmark?` · ${site.landmark}`:''}</small>
+        </button>`).join('')}</div>`:''}
+      <button class="text-button" data-action="closeAtlas">返回游历暂停</button>
+    </section>`,'atlas');
+    drawJourneyAtlas(this.root.querySelector('.journey-atlas canvas'),game,sites);
+  }
+  result(game,reward,rankedResult=null) {
+    if(this.leaderboardResult?.game!==game||this.leaderboardResult.score!==rankedResult){
+      this.leaderboardResult={game,reward,score:rankedResult,submission:{nickname:''}};
+    }
+    const boardButton=leaderboardEntry(Boolean(rankedResult&&!this.leaderboardResult.submission.entry));
+    const key=game.ending??game.finale?.end;
+    const ending=ENDINGS[key];
+    if(!ending){
+      super.result(game,reward);
+      this.root.querySelector('.result-stats')?.insertAdjacentHTML('beforeend',wonderStats(game));
+      this.root.querySelector('.result-buttons').insertAdjacentHTML('beforeend',boardButton);
+      this.offerReplay(game);
+      return;
+    }
+    const retry=key==='locked';
+    this.overlay(`
+      <div class="modal result-modal finale-result" data-ending="${key}">
+        <header class="finale-result-heading">
+          <span class="finale-result-seal brush-label" aria-hidden="true">${ending.stamp}</span>
+          <h2>${ending.name}</h2>
+        </header>
+        <p class="finale-result-line">${ending.line}</p>
+        <dl class="result-stats">
+          <div><dt>游历</dt><dd>${clock(game.time)}</dd></div>
+          <div><dt>击退</dt><dd>${game.kills}</dd></div>
+          <div><dt>吸收</dt><dd>${game.eaten}</dd></div>
+          ${wonderStats(game)}
+        </dl>
+        <div class="reward-line"><span aria-hidden="true">◈</span> ${retry?'结算可得 ':''}${reward} 龙玉</div>
+        <div class="result-buttons">
+          ${retry?'<button class="primary" data-action="retryGate"><span class="brush-label">再闯天门</span> <span aria-hidden="true">↗</span></button>'
+            :'<button class="primary" data-action="restart"><span class="brush-label">再潜一次</span> <span aria-hidden="true">↗</span></button>'}
+          <button class="secondary" data-action="home">返回苇汀</button>
+          ${boardButton}
+        </div>
+      </div>`,'result');
+    if(!retry)this.offerReplay(game);
+  }
+  offerReplay(game){
+    if(!game.openWorld||game.practice)return;
+    this.root.querySelector('.result-buttons').insertAdjacentHTML('afterend',
+      `<p class="journey-seed-result">地图种子 ${game.worldSeed}</p><button class="text-button replay-journey" data-action="replayJourney">重走本局山海</button>`);
+  }
+  drillResult(game,best=0,personalBest=false){
+    const grade=drillGrades[game.drill.grade];
+    this.overlay(`<section class="modal result-modal">
+      <h2>${game.status==='won'?'兽潮已过':'沉入沧溟'}</h2>
+      ${grade?`<p class="drill-grade"><b class="brush-label">${grade}</b> ${game.kills>=game.drill.goal?'达成击退目标':`再击退 ${Math.max(0,game.drill.goal-game.kills)} 可得银印`}</p>`:''}
+      ${best>0?`<p class="drill-best">${personalBest?'刷新最高击退':'通关最高击退'} ${best}</p>`:''}
+      <dl class="result-stats"><div><dt>支撑</dt><dd>${clock(game.time)}</dd></div>
+        <div><dt>击退</dt><dd>${game.kills}</dd></div><div><dt>余敌</dt><dd>${game.enemies.length}</dd></div></dl>
+      <div class="result-buttons"><button class="primary" data-action="seaDrill">再闯兽潮</button>
+        <button class="secondary" data-action="home">返回苇汀</button></div>
+    </section>`,'result');
   }
   bossThreat(game){
     const tag=this.nodes['boss-threat'];
@@ -430,7 +467,7 @@ export class LivingInterface extends Interface {
     });
     const strike=game.hazards.some(hazard=>hazard.warning&&!hazard.previewOnly&&hazard.life>0&&
       Math.hypot(hazard.x-game.p.x,hazard.y-game.p.y,hazard.z-game.p.z)<hazard.radius+1.15);
-    const mark=charging?['冲','冲锋将至']:backwash?['潮',backwash.warning?'返潮将至':'返潮']:strike
+    const mark=game.boss?.frontierArrival?['追','首领追上来了']:charging?['冲','冲锋将至']:backwash?['潮',backwash.warning?'返潮将至':'返潮']:strike
       ? game.stage===3?['劫','雷劫将落']:['落','落击将至']
       : game.boss?.shield&&(game.boss.brokenArmorUntil??0)<=game.time?['甲','玄甲护盾']:null;
     this.nodes.boss.hidden=!mark||game.status!=='playing';
@@ -442,181 +479,23 @@ export class LivingInterface extends Interface {
   flightTip(){
     if(this.flightTipSeen)return;
     this.flightTipSeen=true;
-    const keys=matchMedia('(pointer:coarse)').matches?'按住 ↑ / ↓':'Q / E';
-    this.toast(`${keys} 升降`);
+    const keys=matchMedia('(pointer:coarse)').matches?'按住 ↑ / ↓ 升降':'W 上升 · S 下降';
+    this.toast(keys);
   }
-  inspectOffer(index){
-    const record=this.marketRecord;
-    const book=this.root.querySelector('.market-offer-book');
-    const selected=book?.querySelector(`[data-action="marketInspect:${index}"]`);
-    if(!record||!selected||(index===record.index&&record.purchaseUid==null))return;
-    record.index=index;
-    record.statsOpen=false;
-    const trialReceipt=record.receipt?.kind==='trial';
-    if(trialReceipt)record.receipt=null;
-    if(record.purchaseUid!=null||trialReceipt){
-      record.purchaseUid=null;
-      this.market(record.game);
-      this.root.querySelector(`[data-action="marketInspect:${index}"]`)?.focus({preventScroll:true});
-      return;
-    }
-    for(const button of book.querySelectorAll('.market-inspect'))button.setAttribute('aria-pressed',String(button===selected));
-    const {items,scale,view,canTry}=record.offers;
-    this.root.querySelector('.market-offer-dock').replaceChildren();
-    book.querySelector('.market-offer-details').innerHTML=offerDetails(items[index],index,scale,view,canTry);
-    this.placeOfferActions();
+  openMarket(game,source){
+    this.overlay(renderMarketChoices(game.choices,source),'market-choice');
   }
-  placeOfferActions(){
-    const modal=this.root.querySelector('.market-modal[data-page="offers"]');
-    if(!modal)return;
-    const actions=modal.querySelector('.market-offer-actions');
-    if(!actions)return;
-    const target=modal.querySelector(this.shortMarket.matches?'.market-offer-dock':'.market-offer-action-slot');
-    if(!target||actions.parentElement===target)return;
-    const focus=actions.contains(document.activeElement)?document.activeElement:null;
-    target.append(actions);
-    focus?.focus({preventScroll:true});
-  }
-  offerKeyboard(event){
-    const current=event.target.closest('.market-inspect');
-    const direction={ArrowLeft:-1,ArrowRight:1,ArrowUp:-2,ArrowDown:2}[event.key];
-    if(!current||direction===undefined||event.altKey||event.ctrlKey||event.metaKey)return;
-    const tags=[...current.closest('.market-offer-grid').querySelectorAll('.market-inspect')];
-    const index=Number(current.dataset.action.split(':')[1]);
-    const next=tags.find(button=>Number(button.dataset.action.split(':')[1])===index+direction)
-      ??tags[(tags.indexOf(current)+Math.sign(direction)+tags.length)%tags.length];
-    event.preventDefault();
-    this.inspectOffer(Number(next.dataset.action.split(':')[1]));
-    if(next.isConnected)next.focus();
-  }
-  market(game,feedback){
-    const cultivation=game.cultivation;
-    const view=cultivation.view();
-    if(!view.shopOpen){
-      if(this.overlayType==='market')this.overlay('','');
-      return;
-    }
-    const previous=this.root.querySelector('.market-modal');
-    const focusAction=previous?.contains(document.activeElement)?document.activeElement.dataset.action:null;
-    const slotsUsed=view.slots.filter(Boolean).length;
-    const sameMarket=this.marketRecord?.game===game&&this.marketRecord.wave===view.wave;
-    const learned=Object.fromEntries(view.learned.map(({id,stacks})=>[id,stacks]));
-    const blessing=sameMarket&&previous?.dataset.page==='blessings'
-      ?view.learned.find(item=>item.stacks>(this.marketRecord.learned[item.id]??0)):null;
-    const updated=feedback?tradeReceipt(feedback.before,view,feedback.operation,feedback.result):
-      blessing?{title:`祝福 · ${blessing.name}`,kind:'blessing'}:null;
-    const receipt=updated??(sameMarket?this.marketRecord.receipt:null);
-    const narrow=this.narrowMarket.matches;
-    const bought=Boolean(feedback?.operation==='buy'&&feedback.result.ok&&updated?.weaponUid!=null);
-    const purchaseUid=narrow?(bought?updated.weaponUid:!updated&&sameMarket?this.marketRecord.purchaseUid:null):null;
-    const purchase=narrow&&purchaseUid!=null?view.slots.find(slot=>slot?.uid===purchaseUid):null;
-    const temperSlot=sameMarket?view.slots.find(slot=>slot?.tempering?.length&&slot.uid===this.marketRecord.temperUid):null;
-    const blessings=Boolean(!temperSlot&&game.choices.length&&sameMarket&&this.marketRecord.blessings);
-    const page=temperSlot?'temper':blessings?'blessings':'offers';
-    const scrolls=sameMarket?this.marketRecord.scrolls:{};
-    if(previous)scrolls[previous.dataset.page]=previous.querySelector('.market-ledger').scrollTop;
-    const offers=view.offers.map((offer,index)=>{
-      if(!offer)return null;
-      const preview=cultivation.previewTrade('buy',index);
-      const slot=preview.ok?preview.view.slots.find(slot=>slot?.uid===preview.weapon.uid):null;
-      return {offer,preview,stats:slot?.stats??offer.stats};
-    });
-    const canTry=Boolean(this.actions.marketTry);
-    const lastIndex=sameMarket?this.marketRecord.index:-1;
-    const preferred=offers[lastIndex]?lastIndex:offers.findIndex(item=>item?.preview.ok);
-    const index=purchase?-1:preferred>=0?preferred:offers.findIndex(Boolean);
-    const statsOpen=sameMarket&&index===lastIndex&&(previous?.dataset.page==='offers'
-      ?Boolean(previous.querySelector('.market-offer-stats[open]')):this.marketRecord.statsOpen);
-    const trialAction=sameMarket?this.marketRecord.trialAction:null;
-    const scale=comparisonScale([...offers,...view.slots].map(item=>item?.stats).filter(Boolean));
-    const tagScale=comparisonScale(offers.flatMap(item=>item?[item.stats]:[]));
-    if(bought&&narrow)scrolls.offers=0;
-    this.marketRecord={game,wave:view.wave,receipt,index,blessings,temperUid:temperSlot?.uid??null,scrolls,trialAction,statsOpen,purchaseUid,learned,
-      offers:{items:offers,scale,view,canTry}};
-    const links=weaponLinks(view);
-    this.overlay(`
-      <div class="modal market-modal${previous?' market-refresh':''}" data-page="${page}">
-        <header class="market-heading">
-          <h2>${temperSlot?'淬炼':blessings?'祝福':'交易'}</h2>
-          <p><b>${view.materials}</b> <span class="brush-label">灵材</span></p>
-          ${receipt&&!blessings&&(!temperSlot||receipt.error||receipt.kind==='trial')?`<div class="market-receipt${receipt.kind?` market-${receipt.kind}-receipt`:''}" role="status" tabindex="-1" data-error="${!!receipt.error}">
-            <b>${receipt.title}</b> ${receipt.text?`<span>${receipt.text}</span> `:''}${receipt.changes??''}
-          </div>`:''}
-        </header>
-        ${temperSlot?temperPanel(temperSlot):blessings?`<div class="market-ledger market-blessings" aria-label="待领祝福">
-          ${game.choices.map((choice,index)=>`<button class="market-blessing-card" data-action="choose:${index}" aria-keyshortcuts="${index+1}">
-            <small>${choice.tag}</small><kbd>${index+1}</kbd><b>${choice.name}</b><span>${choice.desc}</span>
-          </button>`).join('')}
-        </div>`:`<div class="market-ledger">
-          <section class="market-offer-book" aria-labelledby="market-offers">
-            <h3 id="market-offers">可取法门</h3>
-            <div class="market-items market-offer-grid" role="group" aria-labelledby="market-offers">
-              ${offers.map((item,i)=>offerTag(item,i,index,view,tagScale)).join('')}
-            </div>
-            <div class="market-offer-details">${purchase?purchaseDetails(purchase,receipt):offerDetails(offers[index],index,scale,view,canTry,statsOpen)}</div>
-          </section>
-          <section aria-labelledby="market-slots">
-            <h3 id="market-slots">随身法门 <small>${slotsUsed} / ${view.slots.length}</small></h3>
-            ${setLedger(view.sets)}
-            ${links.length?`<ul class="market-links" aria-label="随身法门连携">${links.map(link=>
-              `<li><b>${link.name}</b> ${link.hint}</li>`).join('')}</ul>`:''}
-            <div class="market-items market-slot-list">
-              ${view.slots.map(slot=>{
-                if(!slot)return '';
-                const sell=cultivation.previewTrade('sell',slot.uid);
-                const sold=sell.ok?changeMarks(changedEffects(view,sell.view),true):'';
-                const merge=slot.mergeUid==null?null:cultivation.previewTrade('merge',slot.uid);
-                const merged=merge?.ok?merge.view.slots.find(item=>item?.uid===slot.uid):null;
-                const mergedChanges=merged?changeMarks(changedEffects(view,merge.view),true):'';
-                const sharedLoss=Boolean(sold&&mergedChanges===sold);
-                const incompatible=slot.mergeUid==null&&slot.temper&&view.slots.some(other=>other&&other.uid!==slot.uid&&
-                  other.id===slot.id&&other.tier===slot.tier&&other.temper&&other.temper!==slot.temper);
-                return `
-                <article class="market-item market-slot-card" data-uid="${slot.uid}" data-recent="${receipt?.weaponUid===slot.uid}">
-                  ${equippedTechnique(slot)}
-                  ${merged?`<div class="market-outcome" id="merge-outcome-${slot.uid}">
-                    <b>两件合一 · ${fusionLine(slot,merged)}</b> ${sharedLoss?'':mergedChanges}
-                  </div>`:''}
-                  ${sold?`<div class="market-outcome" id="sell-outcome-${slot.uid}"><b>${sharedLoss?'合成或售出':'售出'}</b> ${sold}</div>`:''}
-                  ${incompatible?'<p class="market-outcome">同路淬炼才能合成</p>':''}
-                  <div class="market-slot-tools">
-                    <details class="market-slot-description"><summary>招式</summary><p>${slot.def.desc}</p></details>
-                    <div class="market-item-actions">
-                      ${slot.tempering?.length?`<button class="secondary" data-action="marketTemperOptions:${slot.uid}">淬炼</button>`:''}
-                      ${merged?`<button class="secondary" data-action="marketMerge:${slot.uid}" aria-describedby="merge-outcome-${slot.uid}${sharedLoss?` sell-outcome-${slot.uid}`:''}">合成</button>`:''}
-                      <button class="secondary" data-action="marketSell:${slot.uid}" ${sold?`aria-describedby="sell-outcome-${slot.uid}"`:''}>售出 <b>+${slot.sellPrice}</b></button>
-                    </div>
-                  </div>
-                </article>`;
-              }).join('') || '<p class="market-empty">尚无法门</p>'}
-            </div>
-          </section>
-        </div>`}
-        <footer class="market-footer">
-          ${page==='offers'?'<div class="market-offer-dock"></div>':''}
-          ${!blessings&&!temperSlot?`<button class="secondary" data-action="marketReroll" ${view.materials<view.rerollCost?'disabled':''}>换一批 <b>${view.rerollCost}</b></button>`:''}
-          ${temperSlot?`<button class="secondary" data-action="marketTemperOptions:${temperSlot.uid}">回交易</button>`:''}
-          ${!temperSlot&&game.choices.length?`<button class="secondary" data-action="marketBlessings">${blessings?'回交易':'择祝福'}</button>`:''}
-          <button class="primary" data-action="marketLeave"><span class="brush-label">继续游历</span> <span aria-hidden="true">↗</span></button>
-        </footer>
-      </div>`,'market');
-    const modal=this.root.querySelector('.market-modal');
-    this.placeOfferActions();
-    modal.querySelector('.market-ledger').scrollTop=scrolls[page]??0;
-    if(blessing&&!blessings){
-      (modal.querySelector(`[data-action="marketInspect:${index}"]`)??modal.querySelector('.market-blessing-receipt'))?.focus({preventScroll:true});
-    }else if(updated){
-      modal.querySelector('.market-receipt')?.focus({preventScroll:true});
-    }else if(focusAction){
-      const button=[...modal.querySelectorAll('button')].find(item=>item.dataset.action===focusAction&&!item.disabled);
-      (button??(focusAction.startsWith('choose:')?modal.querySelector('[data-action=marketLeave]'):null))?.focus({preventScroll:true});
-    }else if(!previous&&sameMarket&&trialAction){
-      const button=[...modal.querySelectorAll('button')].find(item=>item.dataset.action===trialAction&&!item.disabled);
-      button?.focus({preventScroll:true});
-      this.marketRecord.trialAction=null;
+  overlay(html,type){
+    super.overlay(html,type);
+    if(type==='help'){
+      const button=this.root.querySelector('.help-modal>.primary');
+      button.dataset.action=this.isMenu?'practice':'closeHelp';
+      button.textContent=this.isMenu?'进入练招水庭 ↗':'返回当前游历 ↗';
+      if(this.isMenu&&document.body.classList.contains('ink-art'))button.insertAdjacentHTML('afterend',
+        `<button class="secondary drill-entry" data-action="seaDrill">沧溟兽潮 <small>2500 敌 · 45 秒${this.seaDrillBest?` · 纪录 ${this.seaDrillBest}`:''}</small></button>
+        <button class="secondary drill-entry" data-action="journeySeed">指定山海</button>`);
     }
   }
-  overlay(html,type){super.overlay(html,type);if(type==='help'){const button=this.root.querySelector('.help-modal>.primary');button.dataset.action=this.isMenu?'practice':'closeHelp';button.textContent=this.isMenu?'进入练招水庭 ↗':'返回当前游历 ↗';}}
   build(g){
     const organs=g.organs();
     const cultivation=g.cultivation?.view();
@@ -628,11 +507,23 @@ export class LivingInterface extends Interface {
       {name:'云炁相变',needs:['fire'],text:'火遇水生蒸汽，凝云后可用雷电充能。'},
     ];
     const circuits=effects.filter(effect=>effect.needs.every(kind=>g.strength(kind)>0));
-    const blessings=[
-      ...(cultivation?.learned??[]),
-      ...UPGRADES.filter(upgrade=>g.buffs[upgrade.id]>0).map(upgrade=>({...upgrade,stacks:g.buffs[upgrade.id]})),
-    ];
+    const awakenings=UPGRADES.filter(upgrade=>g.buffs[upgrade.id]>0);
     const techniques=cultivation?.slots.filter(Boolean)??[];
+    const cascade=CASCADE_CARDS[g.cultivation?.cascade];
+    const cascadeDoctrine=CASCADE_DOCTRINES[g.cultivation?.cascade]?.[g.cultivation?.cascadeDoctrine];
+    const artId=g.cultivation?.dragonArt;
+    const art=DRAGON_ARTS[artId];
+    const artRank=g.cultivation?.dragonArtRank;
+    const doctrine=DRAGON_ART_DOCTRINES[g.cultivation?.dragonArtDoctrine];
+    const artPairing=art && dragonArtPairing(g.cultivation,artId,artRank);
+    const readyArts=art?[]:Object.entries(DRAGON_ARTS).flatMap(([id,spec])=>{
+      const foundation=dragonArtFoundation(g.cultivation,id);
+      return foundation?[`${spec.name}（${foundation.rank===2?'二':'一'}阶）`]:[];
+    });
+    const artNames=ids=>ids.map(id=>TECHNIQUE_BY_ID[id].name).join('、');
+    const relics=g.wonders?.relics,pigment=g.wonders?.pigment;
+    const oath=OATHS[relics?.oath];
+    const wild=WILD_RELICS[relics?.wild];
     const research=[['coil','收阵回响'],['conduit','导电残云'],['alchemy','云汽回生']];
     this.overlay(`
       <div class="modal build-modal">
@@ -641,7 +532,6 @@ export class LivingInterface extends Interface {
           <div><dt>龙躯</dt><dd>${g.p.body.toFixed(1)} 节</dd></div>
           <div><dt>密度</dt><dd>×${g.p.density.toFixed(2)}</dd></div>
           <div><dt>吐息伤害</dt><dd>${Math.round(g.stats().damage)}</dd></div>
-          <div><dt>修炼储备</dt><dd>${Math.floor(g.reserve)}</dd></div>
         </dl>
         <div class="build-sections">
           <section>
@@ -656,17 +546,17 @@ export class LivingInterface extends Interface {
               <summary>器官如何生效</summary>
               <p>每四节激活一处器官，用于姿态传导，并强化已觉醒的对应元素。断尾会减少器官，龙躯长回后恢复。蜕变保留血脉并增强器官潜力。</p>
             </details>
-            <h3>祝福</h3>
-            <div class="build-buffs">${blessings.length
-              ? blessings.map(upgrade=>`<span>${inkGlyph(upgrade.id,upgrade.icon)} ${upgrade.name} · ${upgrade.stacks} 级</span>`).join('')
-              : '吞食灵物，提升灵性以选择祝福。'
-            }</div>
+            ${awakenings.length?`<h3>觉醒</h3>
+              <div class="build-buffs">
+                ${awakenings.map(upgrade=>`<span>${inkGlyph(upgrade.id,upgrade.icon)} ${upgrade.name} · ${g.buffs[upgrade.id]} 级</span>`).join('')}
+              </div>`:''}
             ${techniques.length?`<h3>随身法门</h3><div class="build-buffs">
-              ${techniques.map(slot=>`<span>${inkGlyph(techniqueMark(slot.def),slot.def.icon)} ${slot.def.name} · ${TIER_NAMES[slot.tier-1]}</span>`).join('')}
+              ${techniques.map(slot=>`<span>${inkGlyph(techniqueMark(slot.def),slot.def.icon)} ${slot.def.name} · ${TIER_NAMES[slot.tier-1]}${slot.temperName?` · ${slot.temperName}`:''}</span>`).join('')}
             </div>`:''}
           </section>
           <section>
             <h3>可用连携</h3>
+            ${cascade?`<div class="circuit"><div><b>${cascade.name} · ${cascadeDoctrine?.name??`${g.cultivation.cascadeRank} 阶`}</b><p>${cascadeDoctrine?.description??cascade.desc}</p></div></div>`:''}
             ${circuits.length
               ? circuits.map(effect=>`<div class="circuit">
                   <div class="circuit-glyphs" aria-hidden="true">${effect.needs.map(kind=>`<span class="element-${kind}">${inkGlyph(kind)}</span>`).join('')}</div>
@@ -674,6 +564,29 @@ export class LivingInterface extends Interface {
                 </div>`).join('')
               : '<p>觉醒元素后，可在这里查看对应的连携。</p>'
             }
+            <h3>龙术</h3>
+            ${art? `<div class="circuit"><div><b>${art.name} · ${artRank} 阶${doctrine?` · ${doctrine.names?.[artId]??doctrine.name}`:''}</b>
+              <p>${art.first} 交战蓄势，满势${dragonArtActivation(art,g.stage)}。</p>
+              ${artRank>1?`<p>${artRank===2?art.second:art.third}</p>`:''}
+              ${artPairing?`<p>${artPairing}</p>`:''}
+              ${doctrine?`<p>${doctrine.detail[g.cultivation.dragonArt]}</p>`:''}
+            </div></div>` : `${readyArts.length
+              ? `<p>波末可悟得${readyArts.join('、')}。</p>`
+              : '<p>搭配两门相合的招式，或将一门主招升至玄品。大湖起可在波末悟得龙术。</p>'}
+              <details class="organ-notes">
+                <summary>查看各路龙术的配招</summary>
+                <p>两门配招齐备，其中一门升至灵品，或已有相合的二阶连携，即可从二阶悟起。</p>
+                ${Object.values(DRAGON_ARTS).map(spec=>`<div class="circuit"><div>
+                  <b>${spec.name}</b><p>主招 ${artNames(spec.primary)}<br>搭配 ${artNames(spec.partners)}中的另一门</p>
+                </div></div>`).join('')}
+              </details>`}
+            ${relics?.sword||relics?.feather||relics?.tideStone||pigment||oath||wild?`<h3>随身宝物</h3>
+              ${relics.sword?`<div class="circuit"><div><b>分水古剑 · ${relics.sword} 阶</b><p>自动挥出剑气。破浪时向前斩出更宽的剑气。</p></div></div>`:''}
+              ${pigment?`<div class="circuit"><div><b>${pigment.name}</b><p>${pigment.effect}</p></div></div>`:''}
+              ${relics.feather?`<div class="circuit"><div><b>云鹤金羽</b><p>破浪蓄势加快。</p></div></div>`:''}
+              ${relics.tideStone?`<div class="circuit"><div><b>潮纹石</b><p>每次破浪回复 10 点灵气。</p></div></div>`:''}
+              ${oath?`<div class="circuit"><div><b>${oath.name}</b><p>${oath.description}</p></div></div>`:''}
+              ${wild?`<div class="circuit"><div><b>${wild.title}</b><p>${wild.description}</p></div></div>`:''}`:''}
             <h3>局外研究</h3>
             <ul class="build-research">${research.map(([key,name])=>`<li>
               <span>${name}</span><small class="${g.meta[key]?'unlocked':''}">${g.meta[key]?'已解锁':'未解锁'}</small>
@@ -688,19 +601,19 @@ export class LivingInterface extends Interface {
       <div class="modal help-modal">
         <h2>招式图鉴</h2>
         <dl class="control-guide">
-          <div><dt>游动</dt><dd><span class="desktop-hint">WASD 或按住鼠标</span><span class="touch-hint">拖动摇杆</span></dd></div>
+          <div><dt>前进</dt><dd>自动游动 · <span class="desktop-hint">A / D 转向</span><span class="touch-hint">左右拖摇杆转向</span></dd></div>
           <div><dt>破浪</dt><dd><span class="desktop-hint">空格</span><span class="touch-hint">双击水面</span> · 短暂无敌</dd></div>
-          <div><dt>升降</dt><dd><span class="desktop-hint">Q / E</span><span class="touch-hint">按住 ↑ / ↓</span> · 蛟龙后</dd></div>
+          <div><dt>升降</dt><dd><span class="desktop-hint">W 上升 / S 下降</span><span class="touch-hint">按住 ↑ / ↓</span> · 化蛟后</dd></div>
         </dl>
         <div class="help-moves">
           <article><strong class="element-storm">${inkGlyph('storm')}</strong><h3>盘旋成风</h3><p>持续同向回旋，聚起风眼。</p></article>
           <article><strong class="element-lightning">${inkGlyph('lightning')}</strong><h3>游龙引雷</h3><p>连续 S 形转向，引雷优先击向湿敌。</p></article>
           <article><strong class="element-ring">${inkGlyph('ring')}</strong><h3>盘龙结阵</h3><p>头部贴近龙身围合，收紧或离阵引爆。</p></article>
         </div>
-        <p class="help-reactions"><span class="touch-hint">双指轻点水面暂停。 </span>吐息自动释放，断尾可回收，雷击与龙阵能穿透玄甲。</p>
+        <p class="help-reactions"><span class="touch-hint">双指轻点水面暂停。 </span>自动出招，击败敌人即吸收灵性、增长龙躯。断尾可回收，雷击与龙阵能穿透玄甲。</p>
         <button class="primary" data-action="closeHelp">进入练招水庭 ↗</button>
         <button class="text-button" data-action="closeHelp">返回</button>
       </div>`,'help');
   }
-  credits(){this.overlay(`<div class="modal credits-modal"><div class="eyebrow">笔墨山海</div><h2>潜鳞 · 致谢</h2><p>由苇汀浅水，游向烟波大湖、沧海、青绿千山与九重天阙。五种形态、场景与战斗均以三维网格实时呈现。</p><p>三维引擎：<a href="https://threejs.org/" target="_blank" rel="noopener">Three.js</a>（MIT）；曲面分析：three-mesh-bvh（MIT）。通用笔触蒙版来自 David Revoy 的 Krita 笔刷资源（CC0），完整来源与许可随工程保留。</p><p>开源版的五种角色由代码生成，游动、伸缩与实时笔墨在本地运行。早期 pixelfx 研究源码及其许可保留在工程中。</p><button class="text-button" data-action="close">返回苇汀 ↗</button></div>`,'credits');}
+  credits(){this.overlay(`<div class="modal credits-modal"><div class="eyebrow">笔墨山海</div><h2>潜鳞 · 致谢</h2><p>由苇汀浅水，游向烟波大湖、沧海、青绿千山与九重天阙。四种形态、场景与战斗均以三维网格实时呈现。</p><p>三维引擎：<a href="https://threejs.org/" target="_blank" rel="noopener">Three.js</a>（MIT）；曲面分析：three-mesh-bvh（MIT）。通用笔触蒙版来自 David Revoy 的 Krita 笔刷资源（CC0），完整来源与许可随工程保留。</p><p>开源版使用程序化龙形，龙躯随游动续长，鬃羽与笔墨实时绘制。音乐、环境实录、音效和 pixelfx 的署名与许可随工程保留。</p><button class="text-button" data-action="close">返回苇汀 ↗</button></div>`,'credits');}
 }

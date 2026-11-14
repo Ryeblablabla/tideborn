@@ -31,19 +31,49 @@ test('painted banks keep opening enemies off land and allow swimming along the s
 test('all five food qualities increase growth; gold awakens an element',()=>{
   const g=new Game({seed:9});let xp=0;
   for(let rank=0;rank<5;rank++){const body=g.p.body;g.eat({x:0,z:0,rank});xp+=FOOD[rank].xp;assert.ok(g.p.body>body);}
-  assert.equal(g.essence,Math.min(STAGES[0].need,xp));assert.equal(g.eaten,5);assert.equal(g.gold,1);assert.equal(g.buffs.fire+g.buffs.lightning+g.buffs.storm,1);assert.ok(g.pendingLevels>0);
+  assert.equal(g.essence,Math.min(STAGES[0].need,xp));assert.equal(g.eaten,5);assert.equal(g.gold,1);assert.equal(g.buffs.fire+g.buffs.lightning+g.buffs.storm,1);
 });
 test('collecting enough essence summons a boss without bypassing its gate',()=>{
   const g=new Game({seed:1});g.essence=STAGES[0].need;g.step(1/60);
-  assert.equal(g.status,'market');assert.equal(g.boss,null);
-  assert.equal(g.leaveMarket(),true);g.step(1/60);
+  assert.equal(g.status,'upgrade');assert.equal(g.boss,null);
+  assert.equal(g.choose(0),true);g.step(1/60);
   assert.equal(g.stage,0);assert.ok(g.boss);assert.equal(g.boss.hp,STAGES[0].bossHp);
   const boss=g.boss;g.damage(boss,9999);assert.equal(g.stage,1);assert.equal(g.boss,null);assert.equal(g.essence,0);assert.ok(Math.abs(g.p.hp-g.stats().hp)<1);assert.equal(g.bossKills,1);
 });
-test('four distinct boss gates lead to winged ascension and a terminal victory',()=>{
+test('four distinct boss gates lead to winged ascension and entering the gate earns a victory',()=>{
   const g=new Game({seed:1});
-  for(let stage=0;stage<4;stage++){assert.equal(g.stage,stage);g.summonBoss();assert.equal(g.boss.type,5+stage);g.damage(g.boss,1e6);}
-  assert.equal(g.stage,4);assert.equal(g.status,'ascending');assert.equal(g.bossKills,4);tick(g,7.1);assert.equal(g.status,'ascending');tick(g,13);assert.equal(g.status,'won');assert.ok(Math.hypot(g.p.x-g.ascentTarget.x,g.p.z-g.ascentTarget.z)<4);assert.ok(g.p.y>24);assert.ok(g.reward()>=46);
+  for(const [stage,form] of [0,2,3,4].entries()){
+    assert.equal(g.stage,stage);
+    assert.equal(g.form,form);
+    assert.equal(g.yinglongCruising,false);
+    g.summonBoss();
+    assert.equal(g.boss.type,5+stage);
+    const mass=g.p.mass;
+    g.damage(g.boss,1e6);
+    if(stage===3)assert.equal(g.p.mass,mass);
+  }
+  assert.equal(g.stage,4);
+  assert.equal(g.form,4);
+  assert.equal(g.status,'playing');
+  assert.equal(g.yinglongCruising,true);
+  assert.equal(g.bossKills,4);
+  const origin=g.ascentOrigin;
+  tick(g,.6,{x:1,lift:1});
+  assert.ok(g.p.x>origin.x && g.p.y>origin.y);
+  assert.equal(g.ascentOrigin,origin);
+  tick(g,4);
+  assert.equal(g.status,'ascending');
+  assert.equal(g.yinglongCruising,false);
+  for(let i=0;i<20*60&&g.finale.phase!=='choice';i++)g.step(1/60);
+  assert.equal(g.finale.phase,'choice');
+  assert.equal(g.status,'ascending');
+  tick(g,6);
+  assert.equal(g.finale.ending,'ordained');
+  for(let i=0;i<30*60&&g.status==='ascending';i++)g.step(1/60);
+  assert.equal(g.status,'won');
+  assert.equal(g.finale.end,'ordained');
+  assert.ok(g.p.y>24);
+  assert.ok(g.reward()>=46);
 });
 test('arrival in the mountain chapter rebases the flight and body together',()=>{
   const arrival={x:0,y:11.6,z:-2.8,angle:0};
@@ -57,17 +87,28 @@ test('arrival in the mountain chapter rebases the flight and body together',()=>
   assert.equal(game.p.angle,0);
   assert.equal(game.p.altitude,arrival.y);
 });
-test('pending blessings wait for the market and apply once',()=>{
-  const g=new Game({seed:5});g.pendingLevels=1;g.step(1/60);assert.equal(g.status,'playing');
-  g.waveTime=8.5;g.step(1/60);assert.equal(g.status,'market');assert.equal(new Set(g.choices.map(u=>u.id)).size,3);
-  const before=g.time;g.step(.05,{x:1});assert.equal(g.time,before);const id=g.choices[1].id;
-  assert.equal(g.leaveMarket(),true);assert.equal(g.pendingLevels,1);
-  g.waveTime=16;g.step(1/60);assert.equal(g.status,'market');assert.equal(g.choices[1].id,id);
-  assert.equal(g.choose(1),true);assert.equal(g.buffs[id],1);assert.equal(g.choose(1),false);
-  assert.equal(g.status,'market');assert.equal(g.leaveMarket(),true);assert.equal(g.status,'playing');
+test('a wave pauses for three free choices and resumes after exactly one is applied',()=>{
+  const g=new Game({seed:5});g.step(1/60);assert.equal(g.status,'playing');
+  g.waveTime=13.5;g.step(1/60);
+  assert.equal(g.status,'upgrade');assert.equal(g.choices.length,3);
+  const before=g.time, offered=g.choices;
+  g.step(.05,{x:1});assert.equal(g.time,before);assert.equal(g.choices,offered);
+  assert.equal(g.choose(3),false);assert.equal(g.choose(1),true);
+  assert.equal(g.cultivation.weapons.length,2);assert.equal(g.choices.length,0);
+  assert.equal(g.choose(1),false);assert.equal(g.status,'playing');
+  g.waveTime=16;g.step(1/60);
+  assert.equal(g.status,'upgrade');assert.equal(g.choices.length,3);
+  assert.ok(g.choices.some(choice=>choice.kind==='upgrade'));
 });
-test('automatic projectiles kill enemies and create edible drops',()=>{
-  const g=new Game({seed:14});g.food=[];const e=g.spawnEnemy(0,0,5);g.attackCD=0;tick(g,2.2);assert.ok(e.hp<=0);assert.ok(g.kills>=1);assert.ok(g.food.some(f=>Math.hypot(f.x-e.x,f.z-e.z)<2));
+test('automatic projectiles award growth and essence when they kill',()=>{
+  const g=new Game({seed:14});g.spawnCD=g.hordeCD=Infinity;
+  const body=g.p.body,e=g.spawnEnemy(0,0,5);
+  g.p.invul=3;
+  tick(g,2.2,{turn:0});
+  assert.ok(e.hp<=0);
+  assert.equal(g.eaten,1);
+  assert.ok(g.p.body>body&&g.essence>0);
+  assert.equal(g.food.length,0);
 });
 test('dash grants temporary immunity and respects its cooldown',()=>{
   const g=new Game({seed:5});assert.equal(g.dash(),true);const hp=g.p.hp;g.hurt(30);assert.equal(g.p.hp,hp);assert.equal(g.dash(),false);tick(g,.9);g.hurt(30);assert.ok(g.p.hp<hp);tick(g,3);assert.equal(g.dash(),true);

@@ -187,7 +187,7 @@ export class FormHead {
       drive = 0, phase = time * 2.8, turn = 0, lift = 0, recoil = 0,
       anticipate = 0, strike = 0, grip = 0, jaw = 0, aimYaw = 0, aimPitch = 0,
       contactTarget = null, targetDistance = Infinity, flinch = 0, flinchSide = 0, attackKind = null,
-      clawSide = 0, feedSide = 0, feedReady = 0, morph = 1,
+      clawSide = 0, feedSide = 0, feedReady = 0, morph = 1, chapterMorph, crownLift = 0, crownTurn = 0, waveTuck = 0,
     } = motion ?? {};
     const response = hurtPose[this.stage];
     const load = Math.max(flinch, 0);
@@ -206,14 +206,18 @@ export class FormHead {
     const feedRoll = this.stage === 0 ? (.23 * feed + .12 * feedReady) * feedSide : 0;
     const feedPitch = this.stage === 1 ? .31 * feed - .26 * feedReady : .13 * feed - .19 * feedReady;
     this.crestFold = this.stage === 2 ? 1 - smoothstep(morph, .13, .83) : 0;
+    this.crownFold = this.stage === 3 && chapterMorph !== undefined
+      ? 1 - smoothstep(chapterMorph, .32, 1) : 0;
+    const rise = this.stage === 3 ? crownLift : 0;
     const emerge = this.stage === 1
       ? smoothstep(morph, .07, .31) * (1 - smoothstep(morph, .35, .80)) : 0;
     const headReach = strike - 1.12 * waterClaw;
     const yaw = clamp(.75 * aimYaw + .028 * glide + .074 * turn + response.yaw * retreat
-      + feedYaw + .26 * emerge - .18 * waterClaw * clawSide, -.43 - .06 * load, .43 + .06 * load);
+      + feedYaw + .26 * emerge - .18 * waterClaw * clawSide, -.43 - .06 * load, .43 + .06 * load)
+      + (this.stage === 3 ? .56 * crownTurn : 0);
     const pitch = clamp(-.72 * aimPitch - .015 * breath - .019 * glide - .035 * lift
-      - .17 * anticipate + .087 * headReach + feedPitch - clawLift + .14 * recoil * (1 - load) + response.pitch * flinch - .18 * emerge,
-      -.41 - .15 * load, .41 + .15 * load);
+      - .17 * anticipate + .087 * headReach + feedPitch - clawLift + .14 * recoil * (1 - load) + response.pitch * flinch - .18 * emerge - .31 * rise,
+      -.41 - .15 * load, .41 + .15 * load) + (this.stage === 2 ? .22 * waveTuck : 0);
     const roll = -.026 * turn + .013 * glide - response.roll * retreat + feedRoll - .10 * emerge;
     this.rotation.setFromEuler(this.euler.set(pitch, yaw, roll));
     this.skull.setFromMatrix4(this.matrix.makeRotationFromQuaternion(this.rotation));
@@ -226,13 +230,13 @@ export class FormHead {
     this.shift.x += advance * (.42 * Math.sin(yaw) + .32 * this.forwardX) + response.side * retreat
       - .018 * waterClaw * clawSide;
     this.shift.y += .025 * anticipate - .012 * strike - .011 * snap + .021 * claw + .006 * breath * (1 - drive) +
-      .009 * recoil + response.lift * flinch + (this.stage === 1 ? .024 : .042) * feedReady + .055 * emerge;
+      .009 * recoil + response.lift * flinch + (this.stage === 1 ? .024 : .042) * feedReady + .055 * emerge + .041 * rise;
     this.shift.z += advance;
 
     // Load opens the jaw. It closes as the head meets the target, before
     // the cervical and hyoid response settles through the rest of the neck.
     this.open = clamp(jaw * (1 - grip * .33) * (1 - .88 * load) * (1 - .55 * claw) +
-      .012 * (1 - drive) * Math.max(0, breath) + .13 * settle, 0, 1);
+      .012 * (1 - drive) * Math.max(0, breath) + .13 * settle + .22 * rise, 0, 1);
     this.rotation.setFromAxisAngle(this.jawAxis, this.open * this.data.maxGape);
     this.mandible.setFromMatrix4(this.matrix.makeRotationFromQuaternion(this.rotation));
     this.jawShift.copy(this.hinge).sub(this.scratch.copy(this.hinge).applyMatrix3(this.mandible));
@@ -254,6 +258,16 @@ export class FormHead {
   pose(weight, x, y, z, nx, ny, nz) {
     this.point.set(x, y, z);
     this.normal.set(nx, ny, nz);
+    if (this.crownFold > 0 && y > .133) {
+      // The sculpted antlers and upper crest grow from the brow as it lifts.
+      const height = y - .133;
+      const falloff = height + .047;
+      const folded = this.crownFold * height * height / falloff;
+      const slope = this.crownFold * height * (height + .094) / (falloff * falloff);
+      this.point.y -= .93 * folded;
+      this.point.z += .23 * folded;
+      this.normal.y = (ny - .23 * slope * nz) / (1 - .93 * slope);
+    }
     if (this.crestFold > 0 && y > .108) {
       // Keep the wet roots at the brow while the tall locks rise and stream out.
       const height = y - .108;

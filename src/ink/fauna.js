@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { CLOUD_PASS, CRAB_PINCER, DART_RUSH, RANGED_SHOT_RANGE } from '../encounters.js';
 import { addOccludedLaneTrace, brushMaterial, FlightTraceOcclusion, laneBrush, placeOccludedLaneTrace } from './charge-warning.js';
 import { createInkEnemyGeometry, FAUNA_REGION, SHELL_WOUNDS, smoothFaunaSeams } from './fauna-geometry.js';
+import { FaunaCrowd, faunaStasis } from './fauna-crowd.js';
+import { intakeDeformation } from './dragon-art-enemy-pose.js';
 
 export { INK_FOOD, createInkFoodGeometry } from './fauna-geometry.js';
 
@@ -408,7 +410,54 @@ function attachThreatInk(material, type) {
   };
 }
 
-function attachFaunaInk(material, geometry, type, ink) {
+function describeFauna(enemy, stage) {
+  const airborne=stage===3&&!enemy.boss;
+  const type=airborne?(mountainVisuals[enemy.type]??enemy.type):enemy.type;
+  const form=formForEnemy(enemy,stage,type);
+  const [tint,strength]=pigmentByForm[form]??pigments[type]??pigments[0];
+  return {type,form,tint,strength};
+}
+
+function attachStasisInk(material, instanced) {
+  const varyings = 'varying float vFaunaStasis;\n';
+  material.vertexShader = varyings + material.vertexShader.replace('void main() {', `
+    void main() {
+      #ifdef USE_INSTANCING_COLOR
+        vFaunaStasis = instanceColor.r;
+      #else
+        vFaunaStasis = uFaunaStasis;
+      #endif
+  `);
+  const mark = { value: 0 };
+  material.uniforms.uFaunaStasis = mark;
+  material.vertexShader = 'uniform float uFaunaStasis;\n' + material.vertexShader;
+  material.fragmentShader = varyings + material.fragmentShader.replace(
+    'float reflectance=exp(-pigment*3.1);', /* glsl */`
+    if(vFaunaStasis>.5){
+      float frost=step(1.5,vFaunaStasis);
+      vec3 facets=vPaint*vec3(16.,13.,18.);
+      float chips=noise3(facets+floor(facets.yzx)*.16);
+      float weathered=step(.31,chips)*.23+step(.63,chips)*.27;
+      float rim=pow(1.-abs(dot(n,normalize(-vFaunaView))),2.1);
+      float fracture=1.-smoothstep(.025,.098,abs(chips-.48));
+      float mineral=mix(.36+weathered*.40+fracture*.17,
+        .12+weathered*.21+fracture*.12+rim*.14,frost);
+      pigment=mix(pigment,mineral,.90);
+      paperReserve=mix(fracture*.07,.22+.42*rim+fracture*.24,frost);
+    }
+    float reflectance=exp(-pigment*3.1);`,
+  );
+  if (!instanced) {
+    const previous = material.onBeforeRender;
+    material.onBeforeRender = (renderer, scene, camera, geometry, object, group) => {
+      previous.call(material,renderer,scene,camera,geometry,object,group);
+      mark.value = object.userData.faunaStasis ?? 0;
+      material.uniformsNeedUpdate = true;
+    };
+  }
+}
+
+function attachFaunaInk(material, geometry, type, ink, instanced=false) {
   geometry.setAttribute('inkRestPosition', geometry.attributes.position.clone());
   geometry.setAttribute('inkRestNormal', geometry.attributes.normal.clone());
   material.uniforms.uFaunaBrush = { value: new THREE.Vector3(...(brushResponse[type] ?? brushResponse[0])) };
@@ -427,6 +476,13 @@ function attachFaunaInk(material, geometry, type, ink) {
         'gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
         'vFaunaPaint=faunaPaint; vFaunaView=(modelViewMatrix*vec4(position,1.0)).xyz; gl_Position=projectionMatrix*vec4(vFaunaView,1.0);',
       );
+  if(instanced){
+    material.vertexShader=material.vertexShader
+      .replace('vNormal = normalize(normalMatrix * normal);',
+        'vNormal = normalize(normalMatrix * mat3(instanceMatrix) * normal);')
+      .replace('(modelViewMatrix*vec4(position,1.0)).xyz',
+        '(modelViewMatrix*instanceMatrix*vec4(position,1.0)).xyz');
+  }
   material.fragmentShader = faunaVaryings + material.fragmentShader
     .replace('void main() {', faunaInk + 'void main() {')
     .replace(
@@ -435,6 +491,7 @@ function attachFaunaInk(material, geometry, type, ink) {
     );
   if (SHELL_WOUNDS[type]) attachShellWear(material, type);
   attachThreatInk(material, type);
+  if (ordinaryTypes.has(type)) attachStasisInk(material, instanced);
   material.needsUpdate = true;
 }
 
@@ -760,6 +817,7 @@ export class InkFauna {
     this.pincerLane = null;
     this.dartLane = null;
     this.flightLanes = {};
+    this.crowd = new FaunaCrowd(scene,ink,attachFaunaInk,describeFauna);
   }
 
   contact(event, group) {
@@ -852,9 +910,7 @@ export class InkFauna {
   }
 
   make(enemy, stage = 0) {
-    const airborne = stage === 3 && !enemy.boss;
-    const visualType = airborne ? (mountainVisuals[enemy.type] ?? enemy.type) : enemy.type;
-    const form = formForEnemy(enemy, stage, visualType);
+    const {type:visualType,form,tint,strength}=describeFauna(enemy,stage);
     const forkTail = form === 'fork-tail';
     const source = this.prototype(visualType, form);
     const geometry = source.geometry.clone();
@@ -877,6 +933,7 @@ export class InkFauna {
       material.uniforms = { ...source.material.uniforms, uBossRecovery: { value: recovery } };
     }
     const creature = new THREE.Mesh(geometry, material);
+    creature.userData.faunaStasis = 0;
     if (threatLandmarks[visualType]) creature.userData.threatCue = new THREE.Vector2();
     const surfaceRecoil = (stage === 0 && visualType === 1) ||
       (stage === 2 && (visualType === 2 || visualType === 4 || visualType === 9));
@@ -886,7 +943,6 @@ export class InkFauna {
     const group = new THREE.Group();
     creature.name = INK_SPECIES[visualType];
     group.add(new THREE.Group(), creature);
-    const [tint, strength] = pigmentByForm[form] ?? pigments[visualType] ?? pigments[0];
     Object.assign(group.userData, {
       creature,
       inkFauna: true,
@@ -921,8 +977,21 @@ export class InkFauna {
     for (const group of this.live) {
       const data = group.userData;
       const { enemy, creature, motion } = data;
+      const stasis = faunaStasis(enemy,game?.time);
+      if (stasis !== creature.userData.faunaStasis) {
+        creature.userData.faunaStasis = stasis;
+        if(stasis){
+          data.pigmentBeforeStasis ??= [data.inkTint,data.inkTintAmount];
+          data.inkTint=stasis===2?'#578794':'#817766';
+          data.inkTintAmount=.83;
+        }else [data.inkTint,data.inkTintAmount]=data.pigmentBeforeStasis;
+      }
+      // A promoted crowd member has no saved detailed pose yet. Pose it once
+      // on entry, then retain the exact vertices while the art holds it.
+      if (stasis && data.animatedFrame >= 0) continue;
       const { phase, boss } = enemy;
       const type = data.visualType;
+      const riftFold=game?.activeDragonArt?.kind==='rift' ? intakeDeformation(enemy,game.activeDragonArt,game.time) : 0;
       const contact = creature.userData.faunaContact;
       const claw = data.clawContact;
       let clawTwist = 0, clawTilt = 0;
@@ -956,7 +1025,7 @@ export class InkFauna {
       const pass = game && enemy.cloudPass;
       if (dive?.paired && !dive.hit) diveGroup = group;
       if (pass && !pass.hit && (pass.phase === 'windup' || pass.phase === 'active')) passGroup = group;
-      const frame = Math.floor(time * (boss || claw ? 60 : 30) + phase);
+      const frame = Math.floor(time * (boss || claw || riftFold>.001 ? 60 : 30) + phase);
       if (data.animatedFrame === frame) continue;
       data.animatedFrame = frame;
       const gesture = rangedGesture(rangedPoses[type], enemy, game);
@@ -1060,6 +1129,9 @@ export class InkFauna {
       }
       const p = position.array;
       const rest = inkRestPosition.array;
+      const mouth=enemy.dragonArtPullCenter;
+      const riftYaw=riftFold>.001 ? Math.atan2(mouth.x-enemy.x,mouth.z-enemy.z)-group.rotation.y : 0;
+      const foldCos=Math.cos(riftYaw), foldSin=Math.sin(riftYaw);
       const yawCos = Math.cos(clawTwist), yawSin = Math.sin(clawTwist);
       const tiltCos = Math.cos(clawTilt), tiltSin = Math.sin(clawTilt);
       for (let i = 0, j = 0; i < p.length; i += 3, j += 4) {
@@ -1121,6 +1193,14 @@ export class InkFauna {
         }
         if (contact?.z > .01) contactRecoil(x, y, z, type, contact, out);
         if (clawTilt > .01) clawFollowThrough(out, contact, yawCos, yawSin, tiltCos, tiltSin);
+        if (riftFold>.001) {
+          // Press the silhouette toward the actual capture site in model space.
+          const across=(out[0]*foldCos-out[2]*foldSin)*(1-.53*riftFold);
+          const along=(out[0]*foldSin+out[2]*foldCos)*(1+.47*riftFold);
+          out[0]=across*foldCos+along*foldSin;
+          out[1]*=1-.48*riftFold;
+          out[2]=-across*foldSin+along*foldCos;
+        }
         p[i] = out[0] * scale;
         p[i + 1] = out[1] * scale;
         p[i + 2] = out[2] * scale;

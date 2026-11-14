@@ -1,5 +1,8 @@
 // Acoustic recipes use the same three primitive excitations: filtered noise,
 // damped resonators and a plucked string buffer. They need no network assets.
+import { BLESSING_RAIN_AT, endingElapsedAt, GATE_BIND, LOCK_DOOR, LOCK_LANDING, STOMP_IMPACT, STOMP_LOAD, STOMP_PAW_GAP } from './heaven-finale.js';
+import { LAKE_WAVE_HIT } from './ending-route.js';
+
 const waterShot = [
   [2330,920,.135,.15],
   [1940,610,.115,.077],
@@ -143,7 +146,7 @@ function wetSnap({noise,resonate},strength=1) {
 function eatCue({noise,resonate,pluck},stage,rank,event,variation) {
   const pitch=.96+variation*.036;
   const weight=.85+variation*.064;
-  if(event?.battleLoot&&rank<2){
+  if(event?.battleLoot&&rank<2&&stage>=2){
     noise(2280*pitch,830,.092,.142*weight,{
       attack:.010,q:3.22,shape:[0,1,.38,.09,0],
     });
@@ -710,5 +713,244 @@ export function fieldCue(kind,voice) {
       q:.90,shape:[0,.87,.35,.75,.23,.43,.09,0],
     });
     resonate([132,222,373],.24,.108,{bend:.63});
+  }
+}
+
+function ironLink({noise,resonate},delay,weight,pitch=1) {
+  noise(3020*pitch,1040,.098,.24*weight,{
+    delay,attack:.011,q:3.2,shape:[0,1,.34,.06,0],
+  });
+  resonate([258*pitch,619*pitch,977*pitch],.30,.21*weight,{
+    delay:delay+.013,attack:.022,bend:.93,
+  });
+}
+
+function relayWarning({noise,resonate},duration,light=false) {
+  const length=Math.max(.45,Math.min(2.4,duration??1.55));
+  const weight=light?.67:1;
+  noise(420,2760,length*.88,.21*weight,{
+    delay:length*.08,attack:length*.30,q:1.3,shape:[0,.15,.45,.36,.77,1,.17,0],
+  });
+  resonate([131,186,315],length*.74,.125*weight,{
+    delay:length*.19,attack:length*.26,bend:1.19,
+  });
+  ironLink({noise,resonate},length*.66,.38*weight,1.45);
+}
+
+function gateThunder({noise,resonate},force=1,low=95) {
+  noise(5960,1280,.24,.35*force,{
+    attack:.012,q:1.33,shape:[0,1,.50,.65,.23,.05,0],
+  });
+  resonate([low,low*1.79,low*3.47],.56,.26*force,{
+    delay:.022,attack:.023,bend:.56,
+  });
+  noise(510,97,.76,.26*force,{
+    delay:.064,type:'lowpass',attack:.061,q:.82,shape:[0,.55,1,.69,.38,.08,0],
+  });
+}
+
+export function endingCue(kind,voice,event={}) {
+  const {noise,resonate,pluck}=voice;
+  switch (kind==='endingRoute'?event?.kind:kind) {
+    case 'chain-seen':
+      ironLink(voice,0,.34);
+      break;
+    case 'chain-rattle':
+      noise(326,820,LAKE_WAVE_HIT,.17,{attack:.24,q:.87,shape:[0,.27,.55,.76,1,.58,.08,0]});
+      ironLink(voice,LAKE_WAVE_HIT,.69);
+      ironLink(voice,LAKE_WAVE_HIT+.115,.49,.78);
+      noise(1080,250,.31,.11,{delay:LAKE_WAVE_HIT,attack:.04,q:1.1});
+      break;
+    case 'sea-coil':
+      noise(570,1470,.44,.14,{
+        attack:.083,q:1.2,shape:[0,.40,.68,1,.33,0],
+      });
+      ironLink(voice,.24,.45,.91);
+      break;
+    case 'gate-open':
+      noise(444,93,.93,.32,{
+        type:'lowpass',attack:.062,q:1.1,shape:[0,.65,1,.81,.51,.20,.06,0],
+      });
+      noise(3050,770,.71,.29,{
+        delay:.083,attack:.046,q:1.36,shape:[0,.76,1,.62,.41,.10,0],
+      });
+      noise(960,235,.24,.21,{delay:.38,attack:.012,q:1.68,shape:[0,1,.48,.21,.09,0]});
+      for(const [delay,weight,pitch] of [[.32,.51,.80],[.40,1,.94],[.54,.62,1.11],[.81,.33,1.36]]){
+        ironLink(voice,delay,weight,pitch);
+      }
+      break;
+    case 'relay-lock':
+      relayWarning(voice,event.duration,true);
+      break;
+    case 'relay-escape':
+      noise(520,1660,.30,.13,{attack:.028,q:1.06,shape:[0,.44,1,.51,.16,0]});
+      break;
+    case 'relay-strike':
+      gateThunder(voice,event.hit===false?.59:1,102);
+      if(event.hit!==false){
+        for(const [delay,weight,pitch] of [[.14,.75,.83],[.29,.63,1.04],[.46,.58,1.26],[.64,.51,1.56],[.82,.44,1.82],[.94,.39,2.05]]){
+          ironLink(voice,delay,weight,pitch);
+        }
+        noise(2080,650,.19,.22,{delay:1.035,attack:.008,q:2.1,shape:[0,1,.51,.15,0]});
+        resonate([68,124,196],.62,.14,{delay:1.09,attack:.062,bend:.69});
+      }
+      break;
+    case 'finaleWarning':
+      if(event.kind==='layers'){
+        ironLink(voice,.015,.64,.75);
+        ironLink(voice,.25,.57,1.45);
+      }
+      relayWarning(voice,event.duration);
+      break;
+    case 'finaleStrike':
+      gateThunder(voice,event.hit?1.16:.82,event.kind==='layers'?94:70);
+      if(event.hit)noise(1840,440,.35,.19,{
+        delay:.095,attack:.035,q:1.39,shape:[0,.67,1,.46,.22,0],
+      });
+      break;
+    case 'finaleGate':
+      noise(242,575,.86,.19,{
+        type:'lowpass',attack:.115,q:1.24,shape:[0,.31,.8,1,.55,.12,0],
+      });
+      ironLink(voice,.61,.39,.82);
+      break;
+    case 'finaleBind': {
+      const {ankle,wing,latch}=GATE_BIND;
+      const at = age => endingElapsedAt('lock', age, 'locked');
+      for(const [delay,weight,pitch] of [[at(.25),.42,.75],[at(ankle-.29),.39,.93],
+        [at(ankle+.28),.53,.87],[at(wing-.29),.44,.79],[at(latch+.70),.25,.74]]){
+        ironLink(voice,delay,weight,pitch);
+      }
+      noise(330,880,.86,.17,{
+        delay:at(.30),attack:.127,q:1.05,shape:[0,.28,.68,1,.63,.15,0],
+      });
+      noise(295,1400,.82,.24,{
+        delay:at(wing-.59),attack:.159,q:.94,shape:[0,.18,.66,1,.50,.19,0],
+      });
+      noise(517,151,.96,.16,{
+        delay:at(latch+.30),type:'lowpass',attack:.158,shape:[0,.24,.76,1,.52,.17,0],
+      });
+      for(const [delay,weight] of [[15.13,.18],[18.22,.16]]){
+        noise(225,850,.54,weight,{delay,attack:.154,q:1.12,shape:[0,.29,.87,1,.59,.16,0]});
+      }
+      noise(1070,420,.33,.064,{delay:17.83,attack:.13,q:1.23,shape:[0,.34,1,.71,.19,0]});
+      noise(810,254,.46,.17,{delay:5.65,attack:.034,q:1.34,shape:[0,.43,1,.69,.26,0]});
+      noise(435,122,.53,.25,{delay:6.94,type:'lowpass',attack:.025,q:1.08,shape:[0,1,.72,.37,.09,0]});
+      resonate([73,136,221],.55,.16,{delay:6.97,attack:.016,bend:.69});
+      ironLink(voice,9.99,.59,.67);
+      noise(391,116,.75,.14,{delay:10.04,type:'lowpass',attack:.044,q:1.18,shape:[0,.64,1,.72,.33,.04,0]});
+      ironLink(voice,LOCK_DOOR.grip,.48,1.14);
+      noise(482,152,LOCK_DOOR.close-LOCK_DOOR.pull,.22,{
+        delay:LOCK_DOOR.pull,type:'lowpass',attack:.14,q:1.52,shape:[0,.22,.63,.86,1,.32,0],
+      });
+      noise(428,158,.44,.13,{delay:LOCK_LANDING.catch,type:'lowpass',attack:.028,q:1.06,shape:[0,.83,1,.45,.15,0]});
+      break;
+    }
+    case 'finaleCuff': {
+      const wing=event.joint==='wing';
+      ironLink(voice,.008,wing?1:.85,wing?.81:1.10);
+      noise(1840,wing?295:490,.24,wing?.25:.19,{delay:.047,attack:.011,q:1.47});
+      resonate(wing?[73,138,297]:[128,237],.31,.21,{delay:.044,attack:.018,bend:.79});
+      break;
+    }
+    case 'finaleLatch':
+      ironLink(voice,0,1,.71);
+      resonate([51,87,168],.92,.28,{delay:.033,attack:.032,bend:.51});
+      noise(336,91,.74,.25,{delay:.065,type:'lowpass',attack:.049,shape:[0,.62,1,.58,.19,0]});
+      break;
+    case 'finaleCourtStep':
+      noise(event.side?674:526,172,.23,.23,{attack:.012,q:1.16,shape:[0,1,.68,.28,.08,0]});
+      noise(2100,570,.13,.09,{delay:.025,attack:.019,q:1.71,shape:[0,.62,1,.37,0]});
+      break;
+    case 'finaleInscription':
+      resonate([148,310,526,860],1.46,.29,{attack:.048,bend:.993});
+      for(const [index,pitch] of [294,392,440,587].entries())pluck(pitch,.16-index*.014,.34+index*.20);
+      noise(1290,410,.124,.073,{delay:1.51,attack:.018,q:1.32});
+      break;
+    case 'finaleSeal':
+      noise(670,120,.22,.19,{type:'lowpass',attack:.009,q:1.13,shape:[0,1,.58,.24,.07,0]});
+      resonate([118,259],.34,.13,{delay:.021,attack:.017,bend:.85});
+      noise(2300,950,.18,.07,{delay:.077,attack:.025,q:.86,shape:[0,.34,.81,1,.23,0]});
+      break;
+    case 'finaleRain': {
+      const press=endingElapsedAt('blessing',BLESSING_RAIN_AT);
+      const delayAt=age=>endingElapsedAt('blessing',age)-press;
+      const riverAt=endingElapsedAt('blessing',3.25)-press+endingElapsedAt('epilogue',.92,'ordained');
+      noise(480,1700,.38,.27,{
+        attack:.065,q:1.05,shape:[0,.28,1,.75,.31,.08,0],
+      });
+      noise(2280,1240,riverAt+.65,.19,{
+        delay:delayAt(1.35),attack:.16,q:.67,shape:[0,.30,.76,1,.90,.71,.38,.08,0],
+      });
+      noise(716,385,2.09,.12,{
+        delay:delayAt(1.79),attack:.31,q:.75,shape:[0,.12,.55,.81,1,.73,.26,0],
+      });
+      // Stone taps are dry. The river receives the broad brush as one wet accent.
+      for(const [age,frequency,level] of [[1.75,2250,.091],[1.84,3090,.089],[1.96,1970,.075],
+        [2.10,2720,.057],[2.93,2420,.054],[3.07,2460,.048]]){
+        noise(frequency,760,.071,level,{delay:delayAt(age),attack:.003,q:1.72,shape:[0,1,.46,.10,0]});
+      }
+      noise(1923,640,.47,.15,{delay:riverAt,attack:.017,q:.88,shape:[0,.87,1,.62,.19,0]});
+      break;
+    }
+    case 'finaleLakeBlocked':
+      ironLink(voice, .08, .20, .74);
+      noise(970,420,.66,.12,{delay:.11,attack:.13,q:1.05,shape:[0,.39,.81,1,.51,.14,0]});
+      break;
+    case 'finaleLakeChain': {
+      for (const [delay, weight, pitch] of [[0,.34,.91],[.24,.53,.79],[.57,.31,.68]]) {
+        ironLink(voice, delay, weight, pitch);
+      }
+      noise(460,168,.86,.20,{delay:.31,type:'lowpass',attack:.066,q:1.3,shape:[0,.26,.77,1,.61,.17,0]});
+      noise(1980,650,.44,.19,{delay:.79,attack:.012,q:.94,shape:[0,.95,.73,.42,.17,0]});
+      break;
+    }
+    case 'finaleStomp': {
+      const start=endingElapsedAt('stomp',.19);
+      const brake=endingElapsedAt('stomp',STOMP_IMPACT-.16);
+      noise(384,1870,brake-start,.29,{
+        delay:start,attack:.19,q:.88,shape:[0,.26,.65,1,.83,.39,.05,0],
+      });
+      resonate([94,159],.39,.12,{delay:endingElapsedAt('stomp',.65),attack:.063,bend:.65});
+      break;
+    }
+    case 'finalePawsLand': {
+      const secondPaw=endingElapsedAt('stomp',STOMP_IMPACT+STOMP_PAW_GAP)-endingElapsedAt('stomp',STOMP_IMPACT);
+      noise(492,84,.29,.42,{type:'lowpass',attack:.007,q:1.30,shape:[0,1,.46,.31,.13,0]});
+      noise(1690,575,.18,.24,{delay:.016,attack:.006,q:1.4,shape:[0,1,.42,.13,0]});
+      resonate([63,111,209],.26,.28,{attack:.012,bend:.77});
+      noise(785,380,.31,.23,{delay:secondPaw,attack:.014,q:1.61,shape:[0,.52,1,.32,.19,0]});
+      noise(2410,890,.091,.11,{delay:secondPaw+.009,attack:.006,q:1.76,shape:[0,1,.42,.06,0]});
+      resonate([105,243,386],.34,.16,{delay:secondPaw+.02,attack:.04,bend:.63});
+      noise(243,105,.49,.13,{delay:secondPaw+.12,type:'lowpass',attack:.034,q:2.2});
+      break;
+    }
+    case 'finaleBreak': {
+      const release=STOMP_IMPACT+STOMP_LOAD;
+      const fractureDelay=age=>endingElapsedAt('stomp',release+age)-endingElapsedAt('stomp',release);
+      noise(4870,820,.17,.34,{attack:.009,q:1.41,shape:[0,1,.53,.67,.23,0]});
+      resonate([84,147,311],.29,.26,{attack:.015,bend:.76});
+      for(const [after,pitch] of [[.12,.98],[.62,.74]]) {
+        const delay=fractureDelay(after);
+        noise(1390*pitch,450*pitch,.16,.23,{delay,attack:.022,q:1.8,shape:[0,.31,.82,1,.26,0]});
+        resonate([107*pitch,194*pitch],.20,.15,{delay:delay+.024,attack:.018,bend:.72});
+      }
+      for(const [after,start,finish,weight] of [[.32,3250,1180,.21],[.47,2350,670,.24],[.81,1880,530,.18],[1.21,1300,285,.20]]) {
+        const delay=fractureDelay(after);
+        noise(start,finish,.15,weight,{delay,attack:.013,q:1.6,shape:[0,1,.56,.19,0]});
+      }
+      resonate([46,74,113],.78,.24,{delay:fractureDelay(.64),attack:.051,bend:.45});
+      noise(580,105,.90,.29,{
+        type:'lowpass',delay:fractureDelay(1.12),attack:.061,q:.98,shape:[0,.64,.89,1,.50,.12,0],
+      });
+      ironLink(voice,fractureDelay(.71),.58,.75);
+      break;
+    }
+    case 'finaleChainRelease':
+      ironLink(voice, 0, .72, .79);
+      noise(980, 290, .30, .095, {
+        delay: .24, attack: .046, q: .94, shape: [0, .52, 1, .57, .23, 0],
+      });
+      break;
   }
 }

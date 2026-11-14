@@ -10,6 +10,7 @@ const pigments = {
 const vertexShader = /* glsl */ `
   varying vec3 vSurface;
   varying vec3 vNormal;
+  varying vec3 vCombatWorld;
   void main() {
     vSurface=position;
     vec4 p=vec4(position,1.);
@@ -19,12 +20,15 @@ const vertexShader = /* glsl */ `
       n=mat3(instanceMatrix)*n;
     #endif
     vNormal=normalize(normalMatrix*n);
+    vCombatWorld=(modelMatrix*p).xyz;
     gl_Position=projectionMatrix*modelViewMatrix*p;
   }`;
 const fragmentShader = /* glsl */ `
   varying vec3 vSurface;
   varying vec3 vNormal;
+  varying vec3 vCombatWorld;
   uniform float uLoad,uOpacity,uTime,uDanger;
+  uniform vec4 uCombatWash;
   float noiseAt(vec3 p) {
     p=fract(p*.1031); p+=dot(p,p.yzx+33.33);
     return fract((p.x+p.y)*p.z);
@@ -43,6 +47,12 @@ const fragmentShader = /* glsl */ `
     float breaks=smoothstep(.31,.67,wash+grain*.2);
     float coverage=mix(.44+.56*breaks,.74+.26*breaks,uDanger);
     float ink=uLoad*mix(.76,1.15,wash)*depth;
+    if(uCombatWash.w>.001&&uDanger<.5){
+      vec3 offset=(vCombatWorld-uCombatWash.xyz)*vec3(1.,1.64,1.);
+      float support=(1.-smoothstep(3.,12.,length(offset)))*uCombatWash.w;
+      ink*=1.-.58*support;
+      coverage*=1.-.25*support;
+    }
     gl_FragColor=vec4(1.-clamp(ink,0.,.98),0.,grain,uOpacity*coverage);
   }`;
 
@@ -53,6 +63,7 @@ export class InkCombatStyle {
     this.swaps = [];
     this.lines = new WeakMap();
     this.clock = { value: 0 };
+    this.handoff = { value: new THREE.Vector4() };
     this.marks = new InkCombatMarks(combat);
     this.muted = [];
     this.mute = object => {
@@ -67,7 +78,7 @@ export class InkCombatStyle {
       material = new THREE.ShaderMaterial({
         vertexShader,fragmentShader,
         transparent:opacity<1,depthWrite:opacity>=1,side:source.side,wireframe:source.wireframe,
-        uniforms:{uLoad:{value:ink},uOpacity:{value:opacity},uTime:this.clock,uDanger:{value:Number(danger)}},
+        uniforms:{uLoad:{value:ink},uOpacity:{value:opacity},uTime:this.clock,uDanger:{value:Number(danger)},uCombatWash:this.handoff},
       });
       this.materials.set(key,material);
     }
@@ -103,8 +114,11 @@ export class InkCombatStyle {
       object.material = this.material(source, kind==='relay-arc' ? .69 : danger ? .62 : .55, opacity, danger);
     });
   }
-  render(world, scene, camera, time, game) {
+  render(world, scene, camera, time, game, handoff) {
     this.clock.value = time;
+    if (handoff) this.handoff.value.set(handoff.x,handoff.y,handoff.z,handoff.strength);
+    else this.handoff.value.w = 0;
+    this.marks.handoff = handoff;
     try {
       this.marks.update(world, game, camera, time, this.mute);
       this.paint(world.combat.root, 'attack');

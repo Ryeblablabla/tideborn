@@ -8,6 +8,8 @@ const lateral = new Vector3(1, 0, 0);
 const up = new Vector3(0, 1, 0);
 const forward = new Vector3(0, 0, 1);
 const hinge = new Vector3(0, -.041, .424);
+const upperLip = new Vector3(-.00073, -.03540, .49585);
+const lowerLip = new Vector3(-.00073, -.04517, .49487);
 const lipLine = z => -.036 - .10 * (z - .428);
 const jawArea = (x, z) => smoothstep(z, .416, .452) * (1 - smoothstep(Math.abs(x), .036, .060));
 
@@ -63,6 +65,11 @@ export class YinglongHead {
     this.headPosition = this.head.position.clone();
     this.jaw = bindJaw(body, meshes, this.head);
     this.jawIndex = body.skeleton.bones.indexOf(this.jaw);
+    const bindLip = (point, index) => point.clone().applyMatrix4(body.bindMatrix)
+      .applyMatrix4(body.skeleton.boneInverses[index]);
+    this.upperLip = bindLip(upperLip, this.headIndex);
+    this.lowerLip = bindLip(lowerLip, this.jawIndex);
+    this.lip = new Vector3();
     this.jawAxis = lateral.clone()
       .applyQuaternion(this.head.getWorldQuaternion(new Quaternion()).invert());
     this.parentInverse = new Quaternion();
@@ -70,6 +77,12 @@ export class YinglongHead {
     this.axis = new Vector3();
     this.offset = new Vector3();
     this.stroke = {};
+  }
+
+  mouth(out) {
+    const upper = out.copy(this.upperLip).applyMatrix4(this.head.matrixWorld);
+    const lower = this.lip.copy(this.lowerLip).applyMatrix4(this.jaw.matrixWorld);
+    return upper.lerp(lower, .35);
   }
 
   lipWeight(vertex, lower) {

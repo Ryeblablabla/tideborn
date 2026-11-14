@@ -1,5 +1,8 @@
 import { TAU, clamp, flightBand, waveDuration } from './rules.js';
-import { recordTrialPush } from './trial-hits.js';
+import { updateFrontierBoss } from './frontier-boss.js';
+import { paceSeaDrillEnemy } from './sea-drill.js';
+import { techniqueSlowFactor } from './technique-arts.js';
+import { ENDING_ROUTE_SITES } from './ending-route.js';
 
 export const ENEMY_TYPES = Object.freeze({
   minnow: 0, crab: 1, polyp: 2, kite: 3, eel: 4,
@@ -52,13 +55,40 @@ const chapterPacks = [
 ];
 
 const packDelays = [4.8, 5.6, 5.2, 5.5];
-const openingShoal = { slots: [[minnow,0,4.6], [minnow,-1.9,6.3], [crab,2.3,7.6]] };
+// The first fish passes beside the default swim line while the opening
+// technique winds up. Straight swimming should show the first reward clearly.
+const openingShoal = { slots: [[minnow,1.55,4.4], [minnow,-3.2,6.3], [crab,2.5,7.8]] };
 const backgroundPressure = [
   [.72, .88, 1.12, 1.17, .80],
   [1.07, 1.13, .86, 1.05, .76],
   [.73, .90, 1.29, 1.10, .82],
   [.89, 1.25, .75, 1.23, .76],
 ];
+const cascadeShoals = [null,
+  {name: 'lake-shoal', prey: [minnow, eel], guards: [polyp], hp: .58, interval: 9},
+  {name: 'sea-shoal', prey: [eel, seaRay], guards: [polyp, seaRay], hp: .59, interval: 8},
+  {name: 'cloud-flock', prey: [kite, cloudRay], guards: [kite, cloudRay], hp: .57, interval: 7},
+];
+// Each pod is [lateral, ahead, height, count]. The two late fronts share a
+// bearing and are already in the world when the leading wing meets the player.
+const shoalPods = [null,
+  [[[0,4.15,0,5], [-4.5,7.25,-1,5], [4.7,8.35,.85,5]]],
+  [[[0,4.15,0,3], [-6.15,4.35,0,6], [6.4,7.9,0,6], [-3,4.65,0,1], [3.65,7.65,0,1]],
+   [[2.1,10.8,0,2], [4.9,17.8,0,5], [8.5,20.2,0,2]]],
+  [[[-1.4,4.9,-.65,6], [-4.9,6.4,-1.55,7], [2.5,7.3,-.1,7]],
+   [[4.0,10.8,1.15,2], [5.4,17.1,1.95,5], [8.8,18.8,2.45,3]]],
+];
+const podMembers = [[0,-1], [-1.05,-.3], [1.1,.15], [-.6,1.18], [1.35,1.52], [-1.8,.85], [2.05,-.68], [.35,2.56]];
+const visibleShoalTurns = [0, -.38, .38, -.72, .72, -1.02, 1.02];
+const shoalEnemyLimit = 48;
+const followShoalMinimum = 12;
+const crossCurrent = {name:'cross-current', slots:[
+  [seaRay,-2,8.5], [eel,.5,9.6], [seaRay,2.3,10.8], [eel,1.8,12.6], [polyp,4.0,11.5], [seaRay,4.8,13.1],
+]};
+const highFlank = {name:'high-flank', slots:[
+  [cloudRay,-2.5,9.4,1.2], [kite,-1.1,10.5,1.8], [cloudRay,.9,11.5,2.3],
+  [kite,2.4,12.3,1.1], [cloudRay,2.8,12.8,1.9], [kite,4.1,13.4,.5],
+]};
 export const chapterPackDelay = stage => packDelays[stage] ?? Infinity;
 
 const attack = (name, windup, active, recovery, rest) => ({ name, windup, active, recovery, rest });
@@ -75,6 +105,7 @@ const lanternWave = {startRadius:1.2,radius:10.6,halfWidth:.42,gapWidth:1.38,dam
 
 const point = entity => ({ x: entity.x, y: entity.y, z: entity.z });
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+const distanceSquared = (a, b) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2;
 const heading = (a, b) => Math.atan2(b.x - a.x, b.z - a.z);
 const wrap = angle => Math.atan2(Math.sin(angle), Math.cos(angle));
 
@@ -120,25 +151,32 @@ export function enemyHeight(game, type, phase) {
   return profile.height + (game.stage === 2 ? Math.sin(phase) * .16 : 0);
 }
 
-function packSlots(game, pack, side) {
+function packSlots(game, pack, side, {
+  forward = game.p.angle,
+  turns = [0, .48, -.48, 1.02, -1.02, 1.78, -1.78, Math.PI],
+  minimumFronts,
+} = {}) {
   const p = game.p;
-  const preferred = p.angle + side * .2;
+  const preferred = forward + side * .2;
   const [low, high] = flightBand(game.stage);
   let nearestClear = [];
-  for (const offset of [0, .48, -.48, 1.02, -1.02, 1.78, -1.78, Math.PI]) {
+  for (const offset of turns) {
     const angle = preferred + offset;
     const sin = Math.sin(angle), cos = Math.cos(angle);
     const cross = angle + side * Math.PI * .69;
     const clear = [];
-    for (const [type, lateral, ahead, rise = 0] of pack.slots) {
+    const frontCounts = [0, 0];
+    for (const [type, lateral, ahead, rise = 0, guard = false, wing = 0] of pack.slots) {
       const x = p.x + sin * ahead + cos * lateral * side;
       const z = p.z + cos * ahead - sin * lateral * side;
-      if (Math.abs(x) > 66 || Math.abs(z) > 66 || game.onLand(x, z, .6)) continue;
+      if ((!game.exploring && (Math.abs(x) > 66 || Math.abs(z) > 66)) || game.onLand(x, z, .6)) continue;
       const profile = enemyProfile(type);
       const y = profile.habitat === 'sky' ? clamp(p.y + profile.height + rise, low, high) : profile.height;
       if (game.stage === 3 && game.terrainHeight && game.terrainHeight(x, z) + .82 > y) continue;
-      clear.push({ type, x, y, z, rise, cross, flank: -Math.sign(lateral * side) });
+      clear.push({ type, x, y, z, rise, cross, guard, wing, flank: -Math.sign(lateral * side) });
+      if (!guard) frontCounts[wing]++;
     }
+    if (minimumFronts?.some((minimum, wing) => frontCounts[wing] < minimum)) continue;
     if (clear.length === pack.slots.length) return clear;
     if (clear.length > nearestClear.length) nearestClear = clear;
   }
@@ -175,7 +213,6 @@ function arrivePack(game, wave) {
     }
     count++;
     if (position === slots.length - 1 && wave >= 4) {
-      foe.elite = true;
       foe.hp = foe.maxHp *= 1.25;
       foe.speed *= 1.15;
     }
@@ -190,10 +227,126 @@ function arrivePack(game, wave) {
   return true;
 }
 
+function arriveCascadeShoal(game, wave, formation) {
+  const inSchool = game.enemies.filter(enemy => enemy.hp > 0 && enemy.cascadeShoal).length;
+  if (inSchool >= 28 || game.enemies.length >= 72) return false;
+  const index = game.chapterPack;
+  const side = index % 2 === 0 ? 1 : -1;
+  const airborne = game.stage === 3;
+  const fronts = shoalPods[game.stage];
+  const guardSlots = formation.guards.map((type, i) => [type, i ? 8.4 : -7.4, 10 + i * 2.4, airborne ? 1.2 - i * 2 : 0, true]);
+  const schoolSlots = fronts.flatMap((pods, wing) => pods.flatMap(([lateral, ahead, height, size], pod) =>
+    podMembers.slice(0, size).map(([dx, dz], member) => {
+      const type = formation.prey[Number((wing || pod) && (member + pod + wing) % 4 === 0)];
+      const rise = airborne ? height + (member % 2 === 0 ? .25 : -.25) - enemyProfile(type).height : 0;
+      return [type, lateral + dx, ahead + dz, rise, false, wing];
+    })
+  ));
+  const forward = fronts.length === 2 || Math.cos(game.p.angle) >= -.15
+    ? game.p.angle : Math.sin(game.p.angle) < 0 ? -1.18 : 1.18;
+  const slots = packSlots(game, {slots: [...schoolSlots, ...guardSlots]}, side, {
+    forward, turns: fronts.length === 2 ? visibleShoalTurns : undefined,
+    minimumFronts: fronts.length === 2 ? [7, 4] : [7],
+  });
+  if (!slots.length) return false;
+  const wings = fronts.map((_, wing) => slots.filter(slot => !slot.guard && slot.wing === wing));
+
+  const guards = slots.filter(slot => slot.guard);
+  const reserve = Math.min(wings[1]?.length ?? 0, 6);
+  const shoal = game.stage >= 2 ? [] : null;
+  let schoolSize = inSchool;
+  for (const [wing, members] of wings.entries()) {
+    const front = wing === 0 ? [...members.slice(0, shoalEnemyLimit - schoolSize - reserve), ...guards] : members;
+    let count = 0;
+    let guardCount = 0;
+    let center = null;
+    for (const {type, x, y, z, rise, guard} of front) {
+      if (!guard && schoolSize >= shoalEnemyLimit) break;
+      const foe = game.spawnEnemy(type, x, z, y);
+      if (!foe) break;
+      foe.pack = formation.name;
+      if (airborne) foe.packFlight = {rise, until: game.time + 8};
+      if (guard) {
+        foe.hp = foe.maxHp *= 1.2;
+        foe.shootCD = 1.25 + guardCount * .65;
+        if (airborne) foe.flightPack = index;
+        guardCount++;
+        continue;
+      }
+      foe.cascadeShoal = true;
+      foe.cascadeShoalId = index;
+      foe.shoalWing = wing;
+      foe.hp = foe.maxHp *= wing === 0 ? formation.hp : Math.max(.78, formation.hp);
+      foe.shootCD = Infinity;
+      shoal?.push(foe);
+      center ??= point(foe);
+      count++;
+      schoolSize++;
+    }
+    if (count) game.emit('horde', {wave, count, guards:guardCount, pack:formation.name, cascadeShoal:true,
+      shoalId:index, reinforcement:wing > 0, ...center});
+  }
+  if (schoolSize === inSchool) return false;
+  if (shoal) {
+    game.shoalPatrol = {stage:game.stage, shoal, index, at:game.time, center:point(shoal[0]),
+      spent:false, calmAt:0, holdUntil:0};
+  }
+  game.chapterPack++;
+  return true;
+}
+
+function arriveShoalPatrol(game, wave, patrol) {
+  if (patrol.spent || patrol.shoal.length < followShoalMinimum || game.time < patrol.at + 1.6 ||
+      game.time > patrol.at + 8.6 || game.enemies.length >= 65) return;
+  if (game.activeDragonArt || game.activeCascade) {
+    patrol.calmAt = game.time + .48;
+    return;
+  }
+  if (game.time < patrol.calmAt ||
+      patrol.shoal.filter(enemy=>enemy.hp > 0).length > patrol.shoal.length * .43) return;
+  const p = game.p;
+  const nearby = game.enemiesNear(p, 16).filter(enemy=>enemy.hp > 0 && Math.abs(enemy.y - p.y) < 5).length;
+  if (nearby > 20) return;
+  const budget = nearby > 12 ? 5 : 6;
+
+  const side = Math.sign(wrap(p.angle - heading(p,patrol.center))) || (patrol.index % 2 ? -1 : 1);
+  const airborne = game.stage === 3;
+  const pack = airborne ? highFlank : crossCurrent;
+  const slots = packSlots(game, pack, side, {forward:p.angle + side * .54, turns:[0,-side*.22,side*.30,-side*.45]});
+  if (slots.length < 4) return;
+  let count = 0;
+  for (const {type,x,y,z,rise} of slots.slice(0, budget)) {
+    const foe = game.spawnEnemy(type,x,z,y);
+    if (!foe) break;
+    foe.pack = pack.name;
+    foe.shootCD = .88 + count * .31;
+    if (airborne) {
+      foe.packFlight = {rise, until:game.time + 4.5};
+      foe.flightPack = patrol.index;
+    }
+    count++;
+  }
+  if (!count) return;
+  patrol.spent = true;
+  // Bring ordinary wildlife forward as a group and pay it back on the roaming clock.
+  if (game.shoalSpawnDebt?.stage !== game.stage) game.shoalSpawnDebt = {stage:game.stage, left:0};
+  game.shoalSpawnDebt.left += count;
+  game.hordeCD = Math.max(game.hordeCD, 1.15);
+  game.emit('horde', {wave, count, pack:pack.name, patrol:true, reinforcement:true,
+    fromShoal:patrol.index, ...point(slots[0])});
+}
+
 export function updateEnemySpawns(game, dt) {
-  if (game.practice||game.stage>=4) return;
+  if (game.practice||game.drill||game.stage>=4) return;
   const wave=game.cultivation.wave;
   const duration=waveDuration(game.stage,wave);
+  const developed = game.cultivation.cascade || game.stage>=2 && game.cultivation.dragonArt;
+  const shoal = developed ? cascadeShoals[game.stage] : null;
+  const patrol = shoal && game.shoalPatrol?.stage === game.stage ? game.shoalPatrol : null;
+  if (shoal && !game.boss && game.cascadeShoalStage !== game.stage) {
+    game.cascadeShoalStage = game.stage;
+    game.hordeCD = Math.min(game.hordeCD, 1.1);
+  }
   const pressure=backgroundPressure[game.stage];
   const progress=clamp(game.waveTime/duration,0,1)*(pressure.length-1);
   const left=Math.floor(progress), right=Math.min(left+1,pressure.length-1);
@@ -209,12 +362,33 @@ export function updateEnemySpawns(game, dt) {
       const slots=packSlots(game,openingShoal,1);
       if(slots.length)for(const {type,x,y,z} of slots)game.spawnEnemy(type,x,z,y);
       else game.spawnEnemy();
-    }else game.spawnEnemy();
+    }else if (!shoal || game.enemies.length < 72) {
+      const debt = game.shoalSpawnDebt;
+      if (debt?.stage === game.stage && debt.left > 0) debt.left--;
+      else game.spawnEnemy();
+    }
   }
   if (game.stage === 3) chooseMountainDive(game, dt);
   if (game.boss) return;
+  if (patrol) arriveShoalPatrol(game,wave,patrol);
   game.hordeCD -= dt;
   if (game.hordeCD > 0) return;
+  if (shoal) {
+    // A late full shoal should not enter the final blows of the one the
+    // player is fighting. Background wildlife and boss pressure still update.
+    const art = game.activeDragonArt, cascade = game.activeCascade;
+    const clearing = art && (art.killCount >= 6 || art.age >= .6 && patrol?.spent) ||
+      cascade && (cascade.kills >= 6 || game.time - cascade.started >= .6 && patrol?.spent);
+    if (patrol && clearing) {
+      patrol.holdUntil ||= game.time + 1.55;
+      if (game.time < patrol.holdUntil) return;
+    }
+    const arrived = arriveCascadeShoal(game, wave, shoal);
+    if (!arrived && patrol) patrol.holdUntil = 0;
+    game.hordeCD = arrived ? shoal.interval : 1.65;
+    if (arrived) game.spawnCD = Math.max(game.spawnCD, 1.5);
+    return;
+  }
   // Give the group a clear arrival and then return to the ordinary roaming spawn.
   if (arrivePack(game, wave)) {
     game.hordeCD = Math.max(12, duration * .78);
@@ -247,7 +421,7 @@ function pointOnBankClearLane(game, from, to, padding) {
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
     const sample = { x: from.x + (to.x - from.x) * t, y: to.y, z: from.z + (to.z - from.z) * t };
-    if (Math.abs(sample.x) > 66 || Math.abs(sample.z) > 66 || game.onLand(sample.x, sample.z, padding)) break;
+    if ((!game.exploring && (Math.abs(sample.x) > 66 || Math.abs(sample.z) > 66)) || game.onLand(sample.x, sample.z, padding)) break;
     last = sample;
   }
   return last;
@@ -463,7 +637,7 @@ function steerBossAroundBank(game,enemy,angle,dt){
 }
 
 function updateBoss(game, enemy, dt) {
-  if(game.marketTrial&&enemy.attack===Infinity)return true;
+  if (updateFrontierBoss(game, enemy)) return true;
   const plan = enemy.bossPlan;
   if (!plan) {
     const separation = Math.hypot(game.p.x - enemy.x, game.p.z - enemy.z);
@@ -476,7 +650,7 @@ function updateBoss(game, enemy, dt) {
     const angle = heading(enemy, game.p);
     turn(enemy, angle, dt, game.stage === 0 ? 2.9 : 8);
     if(separation>6.2){
-      if(game.stage<2&&game.shoreHeight)steerBossAroundBank(game,enemy,angle,dt);
+      if(game.shoreHeight)steerBossAroundBank(game,enemy,angle,dt);
       else moveAngle(enemy,angle,enemy.speed*dt);
     }
     if (game.stage === 3) enemy.y += (game.p.y - enemy.y) * Math.min(1, dt * .72);
@@ -538,7 +712,7 @@ function findCloudPass(game, kite) {
   const approach = heading(p, kite);
   let selected = null;
   let best = 11.1;
-  for (const escort of game.enemies) {
+  for (const escort of game.enemiesNear(p,11.1)) {
     if (escort.type !== cloudRay || escort.flightPack !== kite.flightPack || escort.hp <= 0 || escort.cloudPass) continue;
     if (game.time - (escort.lastRangedShotAt ?? -Infinity) < 1.1 || Math.abs(escort.y - height) > 3.8) continue;
     const gap = Math.hypot(escort.x - p.x, escort.z - p.z);
@@ -810,6 +984,27 @@ function updateRegular(game, enemy, dt) {
   const p = game.p;
   const angle = heading(enemy, p);
   const separation = Math.hypot(p.x - enemy.x, p.z - enemy.z);
+  if(game.drill&&paceSeaDrillEnemy(game,enemy,dt,angle,separation))return false;
+  if(enemy.wildRetreat?.until>game.time){
+    turn(enemy,enemy.wildRetreat.angle,dt,9);
+    moveAngle(enemy,enemy.angle,enemy.speed*dt);
+    return true;
+  }
+  const route = game.endingRoute;
+  const marker = game.stage === 3 ? route?.mountainStrike
+    : game.stage === 2 && route?.seaReady ? ENDING_ROUTE_SITES.sea : null;
+  if (marker && !laneActive(enemy) && !enemy.dive && !enemy.cloudPass) {
+    const dx = enemy.x - marker.x, dz = enemy.z - marker.z;
+    const reach = game.stage === 3 ? 7.8 : 6.6;
+    if (dx * dx + dz * dz < reach * reach && Math.abs(enemy.y - marker.y) < 6.4) {
+      // Wildlife turns away from the charged water or thunder before new
+      // attacks start. Existing attack paths still finish normally.
+      const retreat = Math.atan2(dx, dz) + .34 * (enemy.flankSide ?? 1);
+      turn(enemy, retreat, dt, 10);
+      moveAngle(enemy, enemy.angle, enemy.speed * 1.75 * dt);
+      return true;
+    }
+  }
   const canPincer = enemy.pincerReadyAt != null;
   if (canPincer && updatePincer(game, enemy, dt, angle, separation)) return true;
   if(enemy.dartRushReadyAt!=null&&updateDartRush(game,enemy,dt,angle,separation))return true;
@@ -843,7 +1038,7 @@ function updateRegular(game, enemy, dt) {
   }
 
   if (['lobber', 'escort', 'skimmer'].includes(profile.role)) {
-    enemy.shootCD -= dt;
+    enemy.shootCD -= dt * (enemy.wonderHaste ?? 1);
     if (enemy.shootCD <= 0 && separation < RANGED_SHOT_RANGE) {
       enemy.shootCD = profile.cooldown;
       enemy.lastRangedShotAt = game.time;
@@ -865,12 +1060,13 @@ function updateRegular(game, enemy, dt) {
   return canPincer;
 }
 
-export function canDisplaceEnemy(enemy) {
-  return enemy.hp>0&&!enemy.boss&&!enemy.pincer&&!enemy.dartRush&&!enemy.cloudPass&&!enemy.dive&&!enemy.diveExit;
+export function canDisplaceEnemy(enemy, time) {
+  return enemy.hp>0&&!enemy.boss&&!(enemy.dragonArtHeldUntil>time)&&
+    !enemy.pincer&&!enemy.dartRush&&!enemy.cloudPass&&!enemy.dive&&!enemy.diveExit;
 }
 
 export function knockBackEnemy(game, enemy, origin, kind, tier) {
-  if(!canDisplaceEnemy(enemy)||game.time-(enemy.lastWeaponPush??-Infinity)<.44)return;
+  if(!canDisplaceEnemy(enemy,game.time)||game.time-(enemy.lastWeaponPush??-Infinity)<.44)return;
   const x=enemy.x-origin.x,z=enemy.z-origin.z;
   const distance=Math.hypot(x,z);
   if(distance<.08)return;
@@ -886,32 +1082,32 @@ export function updateEnemy(game, enemy, dt, playerDamage) {
   if (enemy.hp <= 0) return;
   const before = point(enemy);
   enemy.hit = Math.max(0, enemy.hit - dt);
-  let customContact=false;
+  const held = !enemy.boss && enemy.dragonArtHeldUntil > game.time;
+  let customContact=held;
   const push=enemy.weaponPush;
-  if(push){
+  if(!held&&push){
     const elapsed=Math.min(dt,push.remaining);
     const distance=elapsed*(push.remaining-elapsed*.5)/push.duration;
     enemy.x+=push.x*distance;enemy.z+=push.z*distance;
     push.remaining-=elapsed;
     if(push.remaining<=1e-6)enemy.weaponPush=null;
-  }else customContact=enemy.boss?updateBoss(game,enemy,dt):updateRegular(game,enemy,dt);
+  }else if(!held)customContact=enemy.boss?updateBoss(game,enemy,dt):
+    updateRegular(game,enemy,dt*techniqueSlowFactor(enemy,game.time));
   game.stayInWater(enemy, enemy.boss ? 1 : .4, before);
-  if(push?.trial){
-    const {receipt,x,z}=push.trial;
-    const moved=((enemy.x-x)*push.x+(enemy.z-z)*push.z)/Math.hypot(push.x,push.z);
-    if(moved>.12){recordTrialPush(game,receipt,enemy.id);push.trial=null;}
-  }
-  if (!customContact) {
-    let contact = distance(enemy, game.p) < enemy.radius + .65 ? game.p : null;
+  if (!customContact && game.p.invul <= 0) {
+    let contact = distanceSquared(enemy, game.p) < (enemy.radius + .65) ** 2 ? game.p : null;
     if (!contact) for (let i = 4; i < game.bodyPath.length; i += 3) {
-      if (distance(enemy, game.bodyPath[i]) < enemy.radius + .38) {
+      if (distanceSquared(enemy, game.bodyPath[i]) < (enemy.radius + .38) ** 2) {
         contact = game.bodyPath[i];
         break;
       }
     }
     if (contact) game.hurt((enemy.boss ? 24 : 8) * (1 + game.stage * .65) * (contact === game.p ? 1 : .65), contact);
   }
-  for (const key of ['wet', 'poison', 'burn', 'charge']) enemy[key] = Math.max(0, enemy[key] - dt);
+  enemy.wet = Math.max(0, enemy.wet - dt);
+  enemy.poison = Math.max(0, enemy.poison - dt);
+  enemy.burn = Math.max(0, enemy.burn - dt);
+  enemy.charge = Math.max(0, enemy.charge - dt);
   enemy.dotCD -= dt;
   if (enemy.dotCD <= 0) {
     enemy.dotCD = .5;
@@ -965,6 +1161,7 @@ function resolveMark(game, hazard) {
 }
 
 export function updateEnemyHazards(game, dt) {
+  const stage=game.stage;
   for (const hazard of game.hazards) {
     hazard.life = hazard.resolveAt == null ? hazard.life - dt : hazard.resolveAt - game.time;
     if (hazard.warning) {
@@ -979,8 +1176,13 @@ export function updateEnemyHazards(game, dt) {
       hazard.x += hazard.vx * dt;
       hazard.y += hazard.vy * dt;
       hazard.z += hazard.vz * dt;
+      if (game.interceptWonderProjectile?.(before,hazard)) {
+        hazard.life=0;
+        if(game.stage!==stage||game.status!=='playing')return;
+        continue;
+      }
       if (segmentDistance(game.p, before, hazard) < (hazard.radius ?? .30) + .50) {
-        game.hurt(hazard.damage ?? 11 * (1 + game.stage * .7));
+        if(!game.catchWonderProjectile?.(hazard,before))game.hurt(hazard.damage ?? 11 * (1 + game.stage * .7));
         hazard.life = 0;
       }
     }

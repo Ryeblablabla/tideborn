@@ -7,7 +7,7 @@ const MAX_SPLASHES=3;
 const clamp=THREE.MathUtils.clamp;
 const smooth=THREE.MathUtils.smoothstep;
 const mix=THREE.MathUtils.lerp;
-const surfaceClearance=(height,stage)=>stage<2?1:1-smooth(height,1.0,2.1);
+const surfaceClearance=(height,stage)=>stage===0?1:1-smooth(height,1.0,2.1);
 const strikeWetness=(height,surface)=>Number.isFinite(height)?1-smooth(height-surface,1.08,1.83):0;
 const SPLIT=0, IMPACT=1, HAZARD_WAVE=2, TAIL=3, BACKWASH_HIT=4, SHALLOW_HIT=5;
 const WATER_STRIKE=6;
@@ -181,9 +181,9 @@ function write(array,index,x=0,y=0,z=0,w=0) {
   array[index].set(x,y,z,w);
 }
 
-const eventNames=new Set(['dash','ringBurst','bossWave','hazardImpact','hit','weaponStrike','evolve']);
+const eventNames=new Set(['dash','ringBurst','bossWave','hazardImpact','hit','weaponStrike','evolve','beamContact']);
 const wetProjectiles=new Set(['bubble','poison','mist']);
-const freshCounts=()=>({dash:0,impact:0,bossWave:0,ring:0,hit:0,charge:0,dive:0,dart:0,waterStrike:0,tailStrike:0,evolve:0});
+const freshCounts=()=>({dash:0,impact:0,bossWave:0,ring:0,hit:0,charge:0,dive:0,dart:0,waterStrike:0,tailStrike:0,evolve:0,beamContact:0});
 export class WaterCombat {
   constructor(water) {
     this.water=water;
@@ -252,7 +252,7 @@ export class WaterCombat {
       const dx=e.to.x-e.x,dz=e.to.z-e.z,length=Math.hypot(dx,dz);
       if(length>.1){fx=dx/length;fz=dz/length;}
     }
-    else if(e.type==='hazardImpact'&&game.boss?.id===e.bossId){
+    else if(e.type==='hazardImpact'&&game.boss&&game.boss.id===e.bossId){
       const dx=e.x-game.boss.x,dz=e.z-game.boss.z,length=Math.hypot(dx,dz);
       if(length>.1){fx=dx/length;fz=dz/length;}
     }
@@ -263,6 +263,8 @@ export class WaterCombat {
       radius=4.7;duration=.81;style=SPLIT;splash='dash';elongation=stage===2?1.84:1.65;spread=1.03;
     }else if(type==='bossWave'){
       force=.91;radius=clamp(e.radius??7.6,2.4,12);duration=clamp(e.life??2.0,.65,2.6);style=HAZARD_WAVE;
+    }else if(type==='beamContact'){
+      force=.61;radius=clamp(e.radius??2.1,1.7,3.5);duration=.68;style=TAIL;elongation=2.10;
     }else if(type==='hazardImpact'){
       const backwash=e.attack==='shell-backwash'&&e.hit;
       const lantern=e.attack==='lantern-pulse'&&e.hit;

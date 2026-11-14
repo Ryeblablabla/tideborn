@@ -1,4 +1,8 @@
-import { STAGES, UPGRADES, META, metaCost } from './model.js';
+import { STAGES, FORM_BY_STAGE, META, metaCost, DEFAULT_AUDIO_MIX } from './model.js';
+
+const journey = STAGES.map(({name,realm},stage) => ({
+  form:FORM_BY_STAGE[stage], name:stage===4?'飞升':name, realm,
+}));
 
 export const clock = t => `${String(Math.floor(t/60)).padStart(2,'0')}:${String(Math.floor(t%60)).padStart(2,'0')}`;
 const INK_GLYPHS={
@@ -21,14 +25,33 @@ export function creatureIcon(stage=0,ink='#273a33',paper='#f3f0e6'){
 }
 const soundSvg = enabled => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 9h4l5-4v14l-5-4H4z"/>${enabled?'<path d="M17 8q6 4 0 8M16 11q2 1 0 2"/>':'<path d="m17 9 5 6m0-6-5 6"/>'}</svg>`;
 const fullSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/></svg>';
+const mixSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 6h5m4 0h7M4 12h10m4 0h2M4 18h2m4 0h10M9 4v4m9 2v4M6 16v4"/></svg>';
+const mixChannels = [['music','音乐'],['ambience','环境'],['effects','音效']];
+const soundButton = sound => `<button class="icon-button sound-button" data-action="sound" title="声音开关" aria-label="${sound?'关闭':'打开'}声音">${soundSvg(sound)}</button>`;
 
 export class Interface {
-  constructor(root,actions){this.root=root;this.actions=actions;this.overlayType='';this.toasts=[];this.root.addEventListener('click',e=>{
-    const b=e.target.closest('[data-action]');if(!b||b.disabled)return;
-    const [action,arg]=b.dataset.action.split(':');actions[action]?.(arg);
-  });}
+  constructor(root,actions){
+    this.root=root;
+    this.actions=actions;
+    this.overlayType='';
+    this.toasts=[];
+    root.addEventListener('click',e=>{
+      const b=e.target.closest('[data-action]');if(!b||b.disabled)return;
+      const [action,arg]=b.dataset.action.split(':');actions[action]?.(arg);
+    });
+    root.addEventListener('input',e=>{
+      const input=e.target;
+      const channel=input.dataset.mix;
+      if(!channel)return;
+      const percent=`${input.valueAsNumber}%`;
+      input.setAttribute('aria-valuetext',percent);
+      input.nextElementSibling.value=percent;
+      actions.mix?.(channel,input.valueAsNumber/100);
+    });
+  }
   actionsHtml(sound){
-    return `<button class="icon-button sound-button" data-action="sound" title="声音开关" aria-label="${sound?'关闭':'打开'}声音">${soundSvg(sound)}</button>
+    return `${soundButton(sound)}
+      <button class="icon-button" data-action="audioSettings" title="声音设置" aria-label="声音设置" aria-haspopup="dialog">${mixSvg}</button>
       <button class="icon-button" data-action="fullscreen" title="全屏" aria-label="全屏">${fullSvg}</button>`;
   }
   menu(save){
@@ -48,7 +71,7 @@ export class Interface {
         </div>
       </main>
       <footer class="evolution-strip">
-        <div class="stage-road">${STAGES.map((s,i)=>`${i?'<i class="stage-connector"></i>':''}<div class="stage-step">${creatureIcon(i)}<span><b class="brush-label">${s.name}</b><small>${s.realm}</small></span></div>`).join('')}</div>
+        <div class="stage-road">${journey.map((step,i)=>`${i?'<i class="stage-connector"></i>':''}<div class="stage-step">${creatureIcon(step.form)}<span><b class="brush-label">${step.name}</b><small>${step.realm}</small></span></div>`).join('')}</div>
         <button class="text-button credits-entry" data-action="credits">致谢</button>
       </footer>
       <div id="overlay"></div><div class="toast-stack" id="toasts"></div>`;
@@ -64,16 +87,17 @@ export class Interface {
           <span class="trial-mark" id="boss-threat" role="status"></span>
         </div>
         <div class="first-controls" id="controls" hidden>
-          <span class="desktop-hint">WASD 游动 · 空格 破浪 · Esc 暂歇</span>
-          <span class="touch-hint">拖动游动 · 双击破浪 · 双指暂停</span>
+          <span class="desktop-hint">自动游动 · A / D 转向 · 空格破浪</span>
+          <span class="touch-hint">自动游动 · 摇杆转向 · 双击破浪</span>
         </div>
-        <div class="touch-stick interactive" id="joystick" aria-label="游动摇杆"><div class="touch-knob" id="knob"></div></div>
+        <div class="touch-stick interactive" id="joystick" aria-label="转向摇杆"><div class="touch-knob" id="knob"></div></div>
         <div class="flight-controls quiet-flight" id="flight-controls" aria-label="升降" hidden>
           <button class="icon-button interactive" id="rise-button" aria-label="升高">↑</button>
           <button class="icon-button interactive" id="fall-button" aria-label="降低">↓</button>
         </div>
         <button id="dash" data-action="dash" hidden tabindex="-1" aria-hidden="true"></button>
         <aside class="ink-notices" aria-live="polite"><div id="evolution"></div><div class="toast-stack" id="toasts"></div></aside>
+        <div id="cascade-notice" class="cascade-notice" aria-live="polite" hidden></div>
       </div>
       <div id="overlay"></div>`;
     this.hudElement=this.root.querySelector('.quiet-hud');
@@ -82,7 +106,7 @@ export class Interface {
   update(game){
     if(this.isMenu||!this.nodes)return;
     this.hudElement.dataset.status=game.status;
-    this.nodes['flight-controls'].hidden=game.stage<2||game.stage>=4;
+    this.nodes['flight-controls'].hidden=game.stage<1||(game.stage===4&&!game.yinglongCruising);
     this.nodes.dash.disabled=game.p.dashCD>.1;
   }
   overlay(html,type){
@@ -108,25 +132,24 @@ export class Interface {
       this.overlayTrigger=null;
     }
   }
-  upgrades(game){
-    this.overlay(`
-      <div class="modal upgrade-modal">
-        <h2>选择祝福</h2>
-        <p class="modal-sub blessing-level">灵性 ${game.level} 级</p>
-        <div class="upgrade-grid">
-          ${game.choices.map((upgrade,index)=>{
-            const current=upgrade.stacks??game.buffs[upgrade.id];
-            const key=index+1;
-            return `<button class="upgrade-card ${upgrade.color}" data-action="choose:${index}" aria-keyshortcuts="${key}">
-              <kbd class="card-no desktop-hint" aria-hidden="true">${key}</kbd>
-              <span class="card-symbol" aria-hidden="true">${inkGlyph(upgrade.id,upgrade.icon)}</span>
-              <span class="card-tag">${upgrade.tag}${current?` · 升至 ${current+1} 级`:''}</span>
-              <h3>${upgrade.name}</h3>
-              <p>${upgrade.desc}</p>
-            </button>`;
-          }).join('')}
-        </div>
-      </div>`,'upgrade');
+  audioSettings(save){
+    const controls=mixChannels.map(([channel,label])=>{
+      const percent=Math.round(100*(save.mix?.[channel]??DEFAULT_AUDIO_MIX[channel]));
+      return `<div class="audio-mix-row">
+        <label for="mix-${channel}">${label}</label>
+        <input id="mix-${channel}" type="range" min="0" max="100" value="${percent}" data-mix="${channel}" aria-valuetext="${percent}%">
+        <output for="mix-${channel}" aria-hidden="true">${percent}%</output>
+      </div>`;
+    }).join('');
+    this.overlay(`<section class="modal audio-settings-modal">
+      <h2>声音设置</h2>
+      <div class="audio-master-row"><span>全部声音</span>${soundButton(save.sound)}</div>
+      ${controls}
+      <button class="text-button" data-action="closeAudioSettings">返回</button>
+    </section>`,'audio-settings');
+  }
+  restoreAudioSettingsFocus(){
+    this.root.querySelector('[data-action="audioSettings"]')?.focus({preventScroll:true});
   }
   pause(game=this.activeRun,save=null){
     const stage=STAGES[game.stage];
@@ -175,7 +198,7 @@ export class Interface {
     const win=game.status==='won';
     const form=STAGES[game.stage].name;
     const icon=document.body.classList.contains('ink-art')
-      ? creatureIcon(game.stage,'#f8efe0','#823d2f') : creatureIcon(game.stage);
+      ? creatureIcon(game.form,'#f8efe0','#823d2f') : creatureIcon(game.form);
     this.overlay(`
       <div class="modal result-modal${win?' victory-modal':''}">
         <header class="result-heading">
@@ -188,7 +211,7 @@ export class Interface {
         <dl class="result-stats">
           <div><dt>游历</dt><dd>${clock(game.time)}</dd></div>
           <div><dt>击退</dt><dd>${game.kills}</dd></div>
-          <div><dt>吞食</dt><dd>${game.eaten}</dd></div>
+          <div><dt>吸收</dt><dd>${game.eaten}</dd></div>
         </dl>
         <div class="reward-line"><span aria-hidden="true">◈</span> ${reward} 龙玉</div>
         <div class="result-buttons">
@@ -211,15 +234,41 @@ export class Interface {
     const maxToasts=document.body.classList.contains('ink-art')?1:3;
     while(host.children.length>maxToasts)host.firstChild.remove();
   }
-  evolution(stage){
+  cascadeNotice(name, count=0, absorbed=0){
+    const notice=this.nodes?.['cascade-notice'];
+    if(!notice)return;
+    notice.hidden=false;
+    notice.replaceChildren();
+    const title=document.createElement('strong');
+    title.textContent=name;
+    notice.append(title);
+    if(count){
+      const label=document.createElement('span');
+      const value=document.createElement('b');
+      value.textContent=String(count);
+      label.append('连破 ',value);
+      if(absorbed>=3)label.append(` · 卷入 ${absorbed}`);
+      notice.append(label);
+    }
+    clearTimeout(this.cascadeNoticeTimer);
+    this.cascadeNoticeTimer=setTimeout(()=>{notice.hidden=true;},count?1900:2400);
+  }
+  evolution(stage,changed=true,{chapterTitle=false}={}){
     const host=this.root.querySelector('#evolution');
     if(!host)return;
-    const form=STAGES[stage];
-    host.innerHTML=`<div class="evolve-banner">
-      ${document.body.classList.contains('ink-art')?`<div class="evolve-seal" aria-hidden="true">${creatureIcon(stage,'#f8efe0','#823d2f')}</div>`:''}
-      <div><h2>${form.name}</h2><p>${form.realm}</p></div>
+    const {name,realm,subtitle}=STAGES[stage];
+    host.innerHTML=chapterTitle?`<div class="chapter-title"><span aria-hidden="true">章</span><h2>${realm}</h2></div>`:`<div class="evolve-banner">
+      ${changed&&document.body.classList.contains('ink-art')?`<div class="evolve-seal" aria-hidden="true">${creatureIcon(FORM_BY_STAGE[stage],'#f8efe0','#823d2f')}</div>`:''}
+      <div><h2>${changed?name:realm}</h2><p>${changed?realm:subtitle}</p></div>
     </div>`;
     const banner=host.firstElementChild;
-    setTimeout(()=>banner.remove(),4200);
+    if(!chapterTitle)setTimeout(()=>banner.remove(),4200);
+  }
+  updateChapterTitle(age){
+    const title=this.root.querySelector('.chapter-title');
+    if(!title)return;
+    if(age>=1.85){title.remove();return;}
+    const opacity=Math.max(0,Math.min(1,age/.38,(1.85-age)/.28));
+    title.style.opacity=String(opacity);
   }
 }

@@ -200,7 +200,7 @@ export class FormLimbs {
     const { air = 0, drive = 0, surge = 0, phase = 0, lift = 0, turn = 0, recoil = 0, change = 0,
       anticipate = 0, strike = 0, grip = 0, aimYaw = 0, targetDistance = Infinity,
       attackKind = null, attackAge = -1, contactAge = -1, chestLoad = 0, hipPush = 0, morph = 1,
-      contactLead = 0, clawSide = null, flinch = 0, flinchSide = 0,
+      contactLead = 0, clawSide = null, flinch = 0, flinchSide = 0, glideRelax = 0, waveTuck = 0,
     } = motion;
     if (contact) {
       this.contact.copy(contact);
@@ -276,10 +276,12 @@ export class FormLimbs {
       // and uncurls the digits. The two sides follow in quick succession.
       const emergenceDelay = water && leg.side < 0 ? .073 : 0;
       const tucked = water
-        ? 1 - smoothstep(morph, (leg.rear ? .41 : .16) + emergenceDelay, leg.rear ? .999 : .87 + emergenceDelay)
+        ? Math.max(waveTuck * (leg.rear ? .36 : .67), 1 - smoothstep(morph,
+          (leg.rear ? .41 : .16) + emergenceDelay, leg.rear ? .999 : .87 + emergenceDelay))
         : 1 - smoothstep(morph, leg.rear ? .28 : .10, leg.rear ? .94 : .71);
       const curled = water
-        ? 1 - smoothstep(morph, (leg.rear ? .56 : .35) + emergenceDelay, leg.rear ? 1 : .92 + emergenceDelay)
+        ? Math.max(waveTuck * .53, 1 - smoothstep(morph,
+          (leg.rear ? .56 : .35) + emergenceDelay, leg.rear ? 1 : .92 + emergenceDelay))
         : tucked;
       let reachGoal = leg.rear || closeClaw ? strike : 0;
       let closeGoal = leg.rear || closeClaw ? grip : 0;
@@ -338,24 +340,28 @@ export class FormLimbs {
       const wave = phase - (leg.rear ? 1.25 : .10) - leg.side * (this.stage === 2 ? 1.15 : .62);
       const stroke = Math.sin(wave);
       const recovery = smoothstep(Math.cos(wave), -.25, .85);
-      const paddle = this.stage === 2 ? (1 - air) * drive * locomotion : 0;
+      const paddle = (1 - air) * drive * locomotion;
       const fly = air * (.16 + .84 * drive) * locomotion;
       const climb = clamp(lift * .22, -.65, 1);
       const inside = turn * leg.side;
       const tuck = surge * .22 + recoil * .24 + change * .20;
       const load = leg.rear ? .14 * anticipate + .33 * reach - .17 * close
         : .33 * anticipate - .58 * reach + (water ? -.09 : .23) * close;
+      // In a steady glide the upper arm hangs below the socket and the
+      // elbow folds back. The more forward rest arm needs a little more sweep.
+      const relaxedGlide = leg.rear ? 0 : glideRelax;
       const pitch = -.25 * paddle * stroke + fly * (.075 * stroke - (leg.rear ? .14 : .10))
         + climb * (leg.rear ? -.10 : .17) - tuck * (leg.rear ? .68 : 1) + load + .16 * tucked +
-        (leg.rear ? -.19 : .37) * fold - .23 * recover + .19 * guard + .22 * press;
+        (leg.rear ? -.19 : .37) * fold - .23 * recover + .19 * guard + .22 * press +
+        (.91 - .07 * leg.side) * relaxedGlide;
       const roll = leg.side * (-.12 * fly - .19 * paddle * recovery + tuck * .10 + inside * .13
         + (leg.rear ? -.10 * reach : .21 * anticipate + .17 * reach - .17 * close) +
-        .16 * fold + .19 * recover + .37 * press);
+        .16 * fold + .19 * recover + .37 * press + .16 * relaxedGlide);
       const bend = .22 * paddle * recovery + fly * (.11 + .095 * Math.sin(wave - .68))
         + tuck * .40 + inside * .08 + climb * (leg.rear ? -.14 : .14)
         + (leg.rear ? .38 * anticipate - .33 * reach + .36 * close
           : .40 * anticipate - .30 * reach + (water ? .32 : .48) * close) + .71 * tucked +
-        (leg.rear ? .56 : .72) * fold - .33 * recover + .42 * guard - .29 * press;
+        (leg.rear ? .56 : .72) * fold - .33 * recover + .42 * guard - .29 * press + .50 * relaxedGlide;
       const reachYaw = leg.rear ? -.10 * aimYaw : aimYaw * (.30 * reach + .10 * close);
       this.shoulder.setFromEuler(this.euler.set(pitch, -inside * .07 + reachYaw, roll));
       this.forearm.setFromEuler(this.euler.set(bend, .025 * stroke * leg.side, leg.side * bend * .18));
@@ -553,9 +559,9 @@ export class FormLimbs {
         latch.releaseOffset.subVectors(leg.posedPalm, leg.posedRoot);
         latch.releaseWrist.copy(this.orientFrame(leg).multiply(this.wrist));
       }
-      if (guard + press > .004) {
+      if (guard + press + relaxedGlide > .004) {
         this.axis.set(1, 0, 0).applyQuaternion(this.forearm);
-        this.wrist.premultiply(this.swing.setFromAxisAngle(this.axis, .40 * guard - .17 * press));
+        this.wrist.premultiply(this.swing.setFromAxisAngle(this.axis, .40 * guard - .17 * press - .32 * relaxedGlide));
       }
       leg.wristTurn.copy(this.wrist).multiply(this.inverse.copy(this.forearm).invert());
       // The planted toe keeps its contact angle while the two free toes

@@ -45,13 +45,16 @@ const fragmentShader = /* glsl */ `
     float fibers=wash(vec2(u*(19.-8.*wind)-current*1.4,(62.-23.*wind-14.*fire)*s+seed));
     float grain=hash(floor(vec2(u*301.,s*113.)));
     float tapered=smoothstep(0.,.06,u)*smoothstep(0.,.12,1.-u);
-    float fringe=1.-smoothstep(.79-.13*wind,.99,abs(s)+(broad-.46)*.21);
+    float tongueSway=.17*sin(8.3*u+seed-current*.9)*fire;
+    float edge=abs(s-tongueSway)+(broad-.46)*(.21+.15*fire);
+    float fringe=1.-smoothstep(.79-.13*wind-.23*fire,.99,edge);
     float darkSide=1.-smoothstep(-.61,.69,s+.14*(broad-.5));
     float deposit=uInk*(.20+.78*darkSide)*(.78+.32*broad)*(1.-fire*.30*u);
     // Wind leaves long dry bristles. Flame reserves a small, moving bright core.
     float dryStroke=smoothstep(.56-.12*wind,.83,fibers)*smoothstep(-.38,.16,s);
-    float tongue=exp(-10.*abs(s-.26-.14*(broad-.5)))*smoothstep(.15,.44,u);
-    float reserve=uReserve*max(dryStroke*(.45+.55*u),fire*tongue*.76);
+    float tongue=exp(-8.*abs(s-.24-tongueSway-.17*(broad-.5)))*smoothstep(.12,.39,u);
+    float licked=(1.-smoothstep(.14,.33,abs(s+.26-tongueSway)))*smoothstep(.38,.77,fibers)*smoothstep(.31,.75,u);
+    float reserve=uReserve*max(dryStroke*(.45+.55*u),fire*max(tongue*.99,licked*.81));
     float coverage=vBrush.w*tapered*fringe*(.74+.23*grain+.09*broad);
     if(uProtectHead>.5){
       vec3 ray=uHead-cameraPosition;
@@ -73,9 +76,9 @@ const PALETTES = {
   ring: {tint:'#83623f',strength:.67,ink:.78,reserve:.47,order:-5,kind:0},
   storm: {tint:'#4e6969',strength:.53,ink:.94,reserve:.75,order:-4,kind:1},
   undertow: {tint:'#425f68',strength:.60,ink:1.14,reserve:.86,order:-4,kind:1},
-  flaming: {tint:'#816347',strength:.65,ink:.90,reserve:.62,order:-4,kind:1},
+  flaming: {tint:'#b9472e',strength:.85,ink:.86,reserve:.74,order:-4,kind:2},
   toxic: {tint:'#5d6c42',strength:.67,ink:.86,reserve:.66,order:-4,kind:1},
-  fire: {tint:'#8b6241',strength:.72,ink:.91,reserve:.69,order:-3,kind:2},
+  fire: {tint:'#b34b2f',strength:.89,ink:.86,reserve:.83,order:-3,kind:2},
 };
 
 class RibbonBatch {
@@ -218,23 +221,24 @@ const FIRE_SKIRTS = [
   {start:3.08,turn:1.38,from:.98,to:.73,low:.02,high:.16,width:.084,roll:.48,steps:18,load:.62},
 ];
 
-const FIRE_TONGUES = Array.from({length:5},(_,i)=>({
-  start:TAU*i/5+Math.sin(i*7.6)*.17,
-  turn:.45+.18*Math.sin(i*7.9),
-  from:.71+i*.032, to:.36+.07*Math.cos(i*5.6),
-  low:.04+.035*(i%3), high:.96+.28*Math.sin(i*8.3+1),
-  width:.156-i*.010,roll:1.0,steps:17,load:.82,
+const FIRE_TONGUES = Array.from({length:7},(_,i)=>({
+  start:TAU*i/7+Math.sin(i*7.6)*.22,
+  turn:.66+.25*Math.sin(i*7.9),
+  from:.58+i*.038, to:.65+.14*Math.cos(i*5.6),
+  low:.035+.026*(i%3), high:i%3===0?1.11+.26*Math.sin(i+1):.49+.31*Math.sin(i*8.3+1),
+  width:i%3===0?.168:.086+i*.006,roll:1.0,steps:16,load:i%3===0?.92:.69,
 }));
 
 function sweep(batch,zone,spec,rotation,height,seed,time,fade,flame=false,wet=null) {
   const steps=spec.steps;
-  const lift=flame ? .78+.27*Math.sin(time*5.7+seed) : 1;
+  const lift=flame ? .82+.22*Math.sin(time*5.7+seed)+.09*Math.sin(time*11.6-seed) : 1;
   batch.reserve(steps+1);
   for(let i=0;i<=steps;i++){
     const u=i/steps;
-    const tipCurl=flame ? (.52+.28*Math.sin(time*5.4+seed))*u*u : 0;
+    const tipCurl=flame ? (.65+.46*Math.sin(time*5.4+seed))*u*u : 0;
     const radiusProgress=flame ? u*u : u;
-    const radial=lerp(spec.from,spec.to,radiusProgress)+.024*Math.sin(u*8+seed);
+    const fold=flame?-.17*Math.sin(Math.PI*u)+.035*Math.sin(u*13+time*5.7+seed)*u:0;
+    const radial=lerp(spec.from,spec.to,radiusProgress)+.024*Math.sin(u*8+seed)+fold;
     const sweepAngle=wet ? wet.spin*(spec.start+spec.turn*u*u+2.35*Math.log(radial)) : spec.start+spec.turn*u;
     const angle=rotation+sweepAngle+.083*Math.sin(u*5.9+seed)+tipCurl;
     const ca=Math.cos(angle),sa=Math.sin(angle);
@@ -311,13 +315,18 @@ export class InkVortexFields {
         const height=clamp(.67+zone.radius*.38+zone.power*.15,1.5,3.9)*(zone.rainfed?1.15:tailDraw?.64:1);
         const wet=surfaceVortex(zone,time);
         const phase=wet ? Math.PI*.5-wet.spin*(Math.PI*.25+.5*wet.phase) : time*(1.14+zone.power*.09)+seed;
-        const sweeps=wet ? WET_SWEEPS : STORM_SWEEPS;
+        const sweeps=wet?WET_SWEEPS:STORM_SWEEPS;
         const pressure=wet ? fade*Math.min(1,wet.load*1.9) : fade;
         for(const [i,spec] of sweeps.entries()){
           sweep(batch,zone,spec,phase,height,seed+i*3.4,time,pressure,false,wet);
         }
+        if(flaming){
+          for(let i=0;i<FIRE_TONGUES.length;i+=2){
+            sweep(batch,zone,FIRE_TONGUES[i],phase*.79,height,seed+i*2.5+7,time,fade,true);
+          }
+        }
       }else{
-        const height=clamp(.82+zone.radius*.24+zone.power*.115,1.3,3.15);
+        const height=clamp(1.30+zone.radius*.40+zone.power*.18,1.95,4.85);
         const phase=time*.66+seed;
         for(const [i,spec] of FIRE_SKIRTS.entries()){
           sweep(this.batches.fire,zone,spec,phase,height,seed+i*2.5,time,fade);

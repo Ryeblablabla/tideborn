@@ -260,26 +260,27 @@ export function addValleyShoulder(environment, root, edge, side, style) {
   });
   ridge.mesh.name=side>0?'江右墨崖':'江左石青';
   const position=ridge.mesh.geometry.attributes.position;
-  const strata=new Float32Array(position.count*3);
+  const strata=new Float32Array(position.count*4);
   const mineral=new Float32Array(position.count);
   const brush=new Float32Array(position.count*2);
   for(let i=0;i<position.count;i++){
     const p=sample(position.getX(i)/width,position.getZ(i)/depth);
-    strata[i*3]=p.strike;
-    strata[i*3+1]=p.d;
-    strata[i*3+2]=p.wetFoot;
+    strata[i*4]=p.strike;
+    strata[i*4+1]=p.d;
+    strata[i*4+2]=p.wetFoot;
+    strata[i*4+3]=Number(side<0);
     mineral[i]=p.mineral;
     brush[i*2]=p.bone;
     brush[i*2+1]=p.bristles;
   }
-  ridge.mesh.geometry.setAttribute('inkStrata',new THREE.BufferAttribute(strata,3));
+  ridge.mesh.geometry.setAttribute('inkStrata',new THREE.BufferAttribute(strata,4));
   ridge.mesh.geometry.setAttribute('inkMineralMask',new THREE.BufferAttribute(mineral,1));
   ridge.mesh.geometry.setAttribute('inkValleyBrush',new THREE.BufferAttribute(brush,2));
   ridge.mesh.userData.inkMineralHold=.85;
 }
 
 /** Sparse silhouettes sit behind the collision-bearing river banks. */
-export function addValleyMass(environment,root,{x,z,width,depth,height,tint,angle=0,near=false,name,folds,brush}) {
+export function addValleyMass(environment,root,{x,z,width,depth,height,tint,angle=0,near=false,name,folds,brush,paintFace}) {
   let deposited=0, inkBone=0, dryEdge=0;
   const cliff=brush==='cliff';
   const {mesh}=environment.terrain(root,x,-.09,z,[width,height,depth],{
@@ -327,7 +328,11 @@ export function addValleyMass(environment,root,{x,z,width,depth,height,tint,angl
         // a colored shoulder, with the next ridge still visible through haze.
         const fall=rise(.27,.64,h/height)*(1-rise(.70,.98,h/height));
         const shoulder=deposited*fall*(cliff?.38:.30);
-        return [Math.max(pigment*.23,pool,shoulder),dryEdge*heightWeight*(cliff?.78:.62)];
+        const ink=Math.max(pigment*.23,pool,shoulder);
+        const paper=dryEdge*heightWeight*(cliff?.78:.62);
+        if(!paintFace)return [ink,paper];
+        const [reserve,crease]=paintFace(u,v,h/height);
+        return [Math.max(ink,crease)*(1-.96*reserve),Math.max(paper,reserve)];
       }
       return [pigment*(near?.70:.49),pigment*.24*rise(.04,.42,h/height)];
     },
@@ -337,12 +342,35 @@ export function addValleyMass(environment,root,{x,z,width,depth,height,tint,angl
   });
   mesh.name=name;
   mesh.userData.inkMineralHold=near?.62:.44;
+  if(paintFace){
+    const position=mesh.geometry.getAttribute('position');
+    const mask=new Float32Array(position.count);
+    const cosine=Math.cos(angle),sine=Math.sin(angle);
+    for(let i=0;i<position.count;i++){
+      const px=position.getX(i),pz=position.getZ(i);
+      const u=(px*cosine-pz*sine)/width;
+      const v=(px*sine+pz*cosine)/depth;
+      const [reserve]=paintFace(u,v,position.getY(i)/height);
+      mask[i]=.93*(1-reserve);
+    }
+    mesh.geometry.setAttribute('inkMineralMask',new THREE.BufferAttribute(mask,1));
+    mesh.userData.inkMineralHold=.82;
+  }
 }
 
 export function shadeValleyStrata(material) {
-  material.vertexShader = 'attribute vec3 inkStrata; attribute vec2 inkValleyBrush; varying vec3 vInkStrata; varying vec2 vValleyBrush;\n'
+  material.vertexShader = 'attribute vec4 inkStrata; attribute vec2 inkValleyBrush; varying vec4 vInkStrata; varying vec2 vValleyBrush;\n'
     + material.vertexShader.replace('vGuides=inkGuides;', 'vGuides=inkGuides; vInkStrata=inkStrata; vValleyBrush=inkValleyBrush;');
-  material.fragmentShader = 'varying vec3 vInkStrata; varying vec2 vValleyBrush;\n' + material.fragmentShader.replace(
+  material.fragmentShader = 'varying vec4 vInkStrata; varying vec2 vValleyBrush;\n' + material.fragmentShader.replace('void main() {', `
+    float valleyInkPool(vec2 p, vec2 centre, vec2 size, float lean, float load, float knot) {
+      vec2 q=p-centre;
+      q.x-=lean*q.y;
+      float edge=length(q/size);
+      float drag=noise3(vec3(q.x*.57+q.y*.19,q.y*.74,knot));
+      return load*(1.-smoothstep(.56,1.1,edge+.48*(drag-.5)));
+    }
+    void main() {
+  `).replace(
     'float reflectance=exp(-pigment*uLandGain*3.1);',
     `float depthWash=1.-smoothstep(26.,100.,vLandscape.y);
      // The modeled beds carry the long direction. Pool on those faces in
@@ -368,6 +396,36 @@ export function shadeValleyStrata(material) {
      pigment=mix(pigment,.88+.24*bed,brokenInk*depthWash*.97);
      paperReserve=max(paperReserve,max(laidPaper*.44,stoneGlaze*drySplit*skip*.29*depthWash));
      paperReserve=max(paperReserve,dryDrag*depthWash*.70);
+     // Broad deposits pool unevenly on two connected low rock faces.
+     // The handful of dry nicks cuts pigment at clumps rather than tracing
+     // the entire fall of the sloping surface.
+     float mineralGlaze=vMineralMask;
+     float westPaint=vInkStrata.w*smoothstep(1.55,3.0,vLandscape.x)*
+       (1.-smoothstep(7.1,10.6,vLandscape.x))*
+       smoothstep(2.9,4.3,vInkStrata.y)*(1.-smoothstep(11.6,14.8,vInkStrata.y));
+     if(westPaint>.001){
+       vec2 p=vInkStrata.xy;
+       float upper=valleyInkPool(p,vec2(14.6,6.8),vec2(5.7,4.05),-.34,1.,3.9);
+       float shoulder=valleyInkPool(p,vec2(9.1,8.4),vec2(4.4,3.95),.71,.92,6.4);
+       float foot=valleyInkPool(p,vec2(1.6,5.8),vec2(5.25,3.6),-1.22,.91,11.7);
+       float load=max(max(upper,shoulder),foot);
+       float slurry=noise3(vec3(p.x*.49+p.y*.19,p.y*.59,2.5));
+       float deposits=smoothstep(.19,.58,load+.18*(slurry-.5));
+       float pooling=smoothstep(.62,.90,load+.12*(slurry-.5));
+       float bringInk=westPaint*deposits*(.79+.21*depthWash);
+       float dryAxis=p.x-.33*p.y+.52*slurry;
+       float bristle=noise3(vec3(dryAxis*2.4,p.y*1.21,13.3));
+       float endGrain=noise3(vec3((p.x+.65*p.y)*1.31,p.y*1.85,8.9));
+       float nicks=smoothstep(.745,.92,bristle*.69+endGrain*.31)*bringInk;
+       float loadedInk=max(.26+.14*pooling,.88*pigment+.065);
+       pigment=mix(pigment,loadedInk,bringInk*.75)*(1.-.23*nicks);
+       paperReserve=mix(paperReserve,min(paperReserve,.18),bringInk*.82);
+       paperReserve=min(.36,paperReserve+.27*nicks)*bringInk+paperReserve*(1.-bringInk);
+       mineralGlaze*=1.-.38*nicks;
+     }
      float reflectance=exp(-pigment*uLandGain*3.1);`
+  ).replace(
+    'vec4(reflectance,paperReserve,grain,1.0)',
+    'vec4(reflectance,paperReserve,mineralGlaze,1.0)',
   );
 }

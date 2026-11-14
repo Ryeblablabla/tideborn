@@ -150,6 +150,7 @@ void main() {
   // Flying-white changes pigment coverage, not the geometry or depth buffer.
   pigment *= 1.0 - broken * uDry * .20;
   float grain = noise3(q * 560.0);
+  pigment += dragonWashBleed * .045;
   pigment *= 1.0 + (grain - .5) * uGranulation * .55;
   float reserve=smoothstep(.05,.85,dot(normalize(vFormNormal),normalize(uReserveDirection)));
   pigment *= 1.0-reserve*uReserveStrength;

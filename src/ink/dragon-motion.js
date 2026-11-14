@@ -1,6 +1,10 @@
 import { MathUtils } from 'three';
 import { flightArrival, flightStroke } from './growth/flight-stroke.js';
 import { clawHoldSeconds } from './claw-surface.js';
+import {
+  BLESSING_RAIN_AT, COURT_PAW_STEPS, COURT_SEAL_AT, GATE_BIND, LOCK_DOOR, LOCK_LANDING, LOCK_SETTLE, LOCK_SNAG, LOCK_STAIR,
+  STOMP_LOAD, STOMP_PAW_GAP,
+} from '../heaven-finale.js';
 
 const { clamp, lerp, smoothstep } = MathUtils;
 const surfaceStride = [3.55, 7.25];
@@ -26,6 +30,7 @@ const feeding = [
   { open: .087, take: .163, close: .254, reach: .64, settle: .49, throat: 2.08 },
   { open: .066, take: .133, close: .205, reach: .76, settle: .42, throat: 1.67 },
   { open: .075, take: .148, close: .220, reach: .71, settle: .44, throat: 1.82 },
+  { open: .081, take: .155, close: .235, reach: .68, settle: .46, throat: 1.94 },
 ];
 const ordinaryFeeding = [
   { open: .035, take: .129, close: .222, reach: .85, settle: .38, throat: 1.28 },
@@ -61,6 +66,7 @@ export class DragonMotion {
     this.lengthVelocity = 0;
     this.wingPhase = 0;
     this.wingPower = 0;
+    this.flightPhase = 0;
     this.wingStroke = { load: 0, rise: 0, recover: 0 };
     this.action = null;
     this.anticipate = 0;
@@ -89,6 +95,12 @@ export class DragonMotion {
     this.castStrength = 0;
     this.arrival = 0;
     this.arrivalStroke = {};
+    this.gatePose = { tuck: 0, front: 0, rear: 0, load: 0, brace: 0, bind: 0, bow: 0,
+      ankle: 0, wing: 0, wingGuard: 0, ankleReach: 0, ankleFlinch: 0, exhaustion: 0, anklePresentation: 0,
+      kick: 0, strain: 0, tetherJerk: 0, lockReach: 0, lockHang: 0, lockBreath: 0, lockSilhouette: 0, stoneReach: 0, stoneLean: 0, stoneHold: 0, stoneCompression: 0, stairElapsed: null, stairKneel: 0, stairRest: 0, doorGrip: 0,
+      lockShockTime: null, lockShock: 0, wingLatchExpose: 0, wingWeight: 0, freeWingSlack: 0,
+      contact: 0, push: 0, fallSide: 0, courtWeight: 0, targets: null,
+      pawWeight: [0, 0] };
     this.morph = 1;
     this.contactLead = 0;
     this.impact = null;
@@ -96,9 +108,27 @@ export class DragonMotion {
     this.clawSide = null;
     this.clawSurface = null;
     this.flowDrive = 0;
+    this.glideRelax = 0;
     this.bodyBeats = [];
     this.flinch = 0;
     this.flinchSide = 1;
+  }
+
+  updateGlidePose(dt) {
+    if (this.stage !== 3) {
+      this.glideRelax = 0;
+      return;
+    }
+    const level = 1 - smoothstep(Math.abs(this.lift), .35, 1.65);
+    const straight = 1 - smoothstep(Math.abs(this.turn), .28, .85);
+    const effort = Math.max(this.surge, this.anticipate, this.strike, this.grip,
+      this.recoil, this.change, this.castStrength, Math.abs(this.flinch));
+    const busy = this.action || this.tailAttack || this.attackKind;
+    const target = busy ? 0 : this.air * level * straight
+      * smoothstep(this.length, 16, 25)
+      * smoothstep(this.speed, 1.9, 5.4)
+      * (1 - smoothstep(effort, .06, .42));
+    this.glideRelax = approach(this.glideRelax, target, target > this.glideRelax ? 5 : 17, dt);
   }
 
   bodyBeat(kind, power, side) {
@@ -363,30 +393,36 @@ export class DragonMotion {
   }
 
   update(frame, dt) {
-    const { stage, heading, position, length, time, seaPose } = frame;
+    const { stage, chapter=stage, heading, position, length, time, seaPose } = frame;
     this.stage = stage;
     const style = profiles[stage];
     const target = Math.max(.7, length * .65 * (1 + stage * .08));
     const last = this.last;
     const fresh = !last || time < last.time;
     const changed = last && !fresh && last.stage !== stage;
+    // Yinglong can already be on screen over the sea. Carry its scale
+    // through the later map cut and let the new display length ease in.
+    const chapterCut = !fresh && stage===4 && chapter===3 && last.chapter===2 && Boolean(frame.chapterWing);
     const dx = last ? position.x - last.x : 0;
     const dy = last ? position.y - last.y : 0;
     const dz = last ? position.z - last.z : 0;
     const planar = Math.hypot(dx, dz);
     const relocated = Math.hypot(planar, dy) > Math.max(2, dt * 24);
-    const airborne = stage >= 3 ? 1 : stage === 2 ? smoothstep(position.y, .9, 2.2) : 0;
-    if (fresh || relocated) {
+    const airborne = stage < 2 ? 0 : chapter >= 3 ? 1 : smoothstep(position.y, .9, 2.2);
+    if (chapterCut) {
+      this.heading += wrap(heading - last.heading);
+    } else if (fresh || relocated) {
       this.heading = heading;
       this.speed = this.drive = this.surge = this.turn = this.bank = this.lift = this.pitch = 0;
       this.flowDrive = 0;
       this.air = airborne;
       this.recoil = this.swallow = 0;
     }
-    if (fresh || (relocated && !changed)) {
+    if (fresh || (relocated && !changed && !chapterCut)) {
       this.length = target;
       this.lengthVelocity = 0;
       this.phase = 0;
+      this.flightPhase = 0;
       this.change = 0;
     }
     if (changed) this.change = 1;
@@ -431,9 +467,9 @@ export class DragonMotion {
       this.heading += rate * dt;
       // Body roll carries momentum into the turn and settles as the heading catches up.
       const lateral = (Math.cos(heading) * dx - Math.sin(heading) * dz) / dt;
-      this.turn = approach(this.turn, clamp(rate * .17 + lateral * (stage === 4 ? .26 : .09), -1, 1), 8, dt);
+      this.turn = approach(this.turn, clamp(rate * .17 + lateral * (stage >= 3 ? .26 : .09), -1, 1), 8, dt);
       const pitch = Math.atan2(this.lift, Math.max(3.6, this.speed));
-      if (stage === 2 && seaPose) {
+      if (seaPose) {
         const descent = smoothstep(-seaPose.vertical, .23, 2.04) * smoothstep(seaPose.height, .73, 1.49);
         const rise = smoothstep(seaPose.vertical, .38, 2.7);
         const wet = 1 - smoothstep(seaPose.height, 1.02, 1.85);
@@ -453,24 +489,206 @@ export class DragonMotion {
       this.recoil = Math.min(1, approach(this.recoil, 0, 6.6, dt) + Math.max(0, -jump - .08) * .62);
     }
 
+    let lockLook=0, lockRelease=0, lockExhale=0, lookDown=0, gateDrive=0, courtBow=0;
     if (stage === 4) {
+      const gate = frame.finale, pose = this.gatePose;
+      pose.stairLandmark=frame.lockLandingLandmark;
+      const stomp = gate?.phase === 'stomp';
+      const blessing = gate?.phase === 'blessing';
+      const audience = gate?.phase === 'audience';
+      const locked = gate?.phase === 'lock' || gate?.phase === 'complete' && gate.ending === 'locked';
+      const age = gate?.age ?? 0, impact = gate?.impactAt ?? 1.05;
+      const fracture = impact + STOMP_LOAD;
+      pose.tuck = stomp ? pulse(age, 0, .34, impact + .25, fracture + .24) : 0;
+      pose.front = stomp ? pulse(age, .52, impact - .04, fracture + .02, fracture + .45) : 0;
+      pose.rear = stomp ? pulse(age, .78, impact + .24, fracture + .10, fracture + .66) : 0;
+      pose.load = stomp ? pulse(age, impact - .035, impact + .21, fracture, fracture + .33) : 0;
+      pose.brace = stomp ? pulse(age, .15, .90, fracture + .34, 2.84) : 0;
+      pose.targets = frame.gatePawTargets;
+      pose.courtLandmark = frame.courtLandmark;
+      pose.courtAge = audience ? age : 0;
+      pose.pawWeight[0] = stomp ? pulse(age, .76, impact, fracture - .025, fracture + .14) : 0;
+      pose.pawWeight[1] = stomp ? pulse(age, .83, impact + STOMP_PAW_GAP, fracture + .03, fracture + .21) : 0;
+      pose.contact = Math.max(pose.pawWeight[0],pose.pawWeight[1]);
+      pose.doorGrip=0;
+      pose.landingFold = stomp ? pulse(age, impact - .39, impact + .018, fracture + .08, fracture + .38) : 0;
+      pose.push = stomp ? pulse(age, fracture + .015, fracture + .32, fracture + .52, fracture + .90) : 0;
+      pose.courtWeight = audience ? pulse(age, 1.40, 2.20, COURT_SEAL_AT+.19, 4.27) : 0;
+      pose.fallSide = Math.tanh((gate?.start?.x ?? 0) * .46);
+      if (audience) {
+        const brake = pulse(age, 1.13, 1.60, 1.76, 2.18);
+        const accept = pulse(age, 2.14, 2.66, COURT_SEAL_AT + .13, 4.25);
+        pose.front = pulse(age, 1.31, 1.63, 2.30, 2.58);
+        pose.tuck = pulse(age, 1.43, 2.18, 3.76, 4.30);
+        pose.pawWeight[0] = pulse(age, 1.39, COURT_PAW_STEPS[0], 3.69, 3.98);
+        pose.pawWeight[1] = pulse(age, 1.87, COURT_PAW_STEPS[1]+.035, 3.80, 4.12);
+        pose.contact = Math.max(...pose.pawWeight);
+        courtBow = .87 * accept;
+        pose.bow = accept;
+        this.pitch = lerp(this.pitch, .21, brake * .68);
+        this.pitch = lerp(this.pitch, -.33, .95 * accept);
+        this.bank -= .14 * (pose.pawWeight[0] - pose.pawWeight[1]);
+      } else pose.bow = 0;
+      pose.ankle = locked ? smoothstep(age, GATE_BIND.ankle-.04, GATE_BIND.ankle+.15) : 0;
+      pose.ankleReach = locked ? pulse(age,GATE_BIND.ankle-.30,GATE_BIND.ankle-.05,GATE_BIND.ankle+.035,GATE_BIND.ankle+.27) : 0;
+      pose.anklePresentation = locked ? pulse(age,GATE_BIND.ankle-.30,GATE_BIND.ankle-.025,GATE_BIND.ankle+.11,GATE_BIND.ankle+.40) : 0;
+      pose.ankleFlinch = locked ? pulse(age,GATE_BIND.ankle-.15,GATE_BIND.ankle+.055,GATE_BIND.ankle+.18,GATE_BIND.ankle+.45) : 0;
+      pose.exhaustion = locked ? smoothstep(age,GATE_BIND.latch+1.05,GATE_BIND.latch+1.94) : 0;
+      pose.wingGuard = locked ? pulse(age,GATE_BIND.wing-.08,GATE_BIND.wing+.04,GATE_BIND.wing+.16,GATE_BIND.wing+.38) : 0;
+      pose.wing = locked ? smoothstep(age, GATE_BIND.wing-.02, GATE_BIND.wing+.19) : 0;
+      pose.kick = locked ? pulse(age,GATE_BIND.ankle+.05,GATE_BIND.ankle+.26,GATE_BIND.ankle+.38,GATE_BIND.ankle+.56) : 0;
+      pose.bind = locked ? smoothstep(age, GATE_BIND.latch-.035, GATE_BIND.latch+.22) : 0;
+      pose.tetherJerk = locked ? pulse(age,GATE_BIND.wing+.01,GATE_BIND.wing+.13,GATE_BIND.wing+.22,GATE_BIND.wing+.40) : 0;
+      pose.strain = locked ? .58*pulse(age,GATE_BIND.wing+.32,GATE_BIND.wing+.55,GATE_BIND.latch-.25,GATE_BIND.latch+.07) : 0;
+      if (stomp) {
+        const dive = pulse(age, .08, .48, .70, impact + .12);
+        this.pitch = lerp(this.pitch, -.63, dive * .72);
+        this.pitch = lerp(this.pitch, -.13, pose.load * .82);
+        this.pitch = lerp(this.pitch, .29, pose.push * .86);
+      }
+      if (locked) {
+        const {ankle,wing,latch}=GATE_BIND;
+        const elapsed=gate.elapsed??age;
+        pose.lockShockTime=elapsed<.91?elapsed:null;
+        pose.lockShock=pulse(elapsed,0,.15,.23,.67);
+        const firstReach=pulse(age,.24,.54,ankle-.06,ankle+.18);
+        const secondReach=pulse(age,ankle+.48,wing-.24,wing-.04,wing+.18);
+        gateDrive=Math.max(firstReach,secondReach);
+        const {skid,catch:catchPaw,compression,rebound,release,rest}=LOCK_LANDING;
+        const reachAfterFall=pulse(elapsed,14.57,LOCK_STAIR.touch,LOCK_STAIR.lip,rest-.53);
+        const recoilOnStone=pulse(elapsed,skid,catchPaw,16.46,17.22);
+        const compress=pulse(elapsed,catchPaw-.13,compression,compression,rebound);
+        const kick=pulse(elapsed,compression,rebound,rebound,release);
+        const lastPull=pulse(elapsed,9.41,10.13,10.24,11.34);
+        const snag=pulse(elapsed,LOCK_SNAG.start,LOCK_SNAG.peak,LOCK_SNAG.release,LOCK_SNAG.end);
+        const drop=pulse(elapsed,13.85,14.49,15.06,15.80);
+        const doorReach=pulse(elapsed,LOCK_DOOR.reach,LOCK_DOOR.grip-.13,LOCK_DOOR.release,LOCK_DOOR.release+.24);
+        pose.lockReach=Math.max(firstReach*.69,secondReach,.41*reachAfterFall,.58*doorReach);
+        pose.pawWeight[0]=pose.targets?pulse(elapsed,LOCK_DOOR.grip-.25,LOCK_DOOR.grip,LOCK_DOOR.release-.022,LOCK_DOOR.release+.20):0;
+        pose.contact=pose.pawWeight[0];
+        pose.doorGrip=pulse(elapsed,LOCK_DOOR.grip-.09,LOCK_DOOR.pull,LOCK_DOOR.release-.04,LOCK_DOOR.release+.15);
+        pose.stoneReach=smoothstep(elapsed,14.77,LOCK_STAIR.touch+.14);
+        pose.stairElapsed=elapsed>=14.77?elapsed:null;
+        pose.stoneLean=smoothstep(elapsed,LOCK_SETTLE.load,LOCK_SETTLE.rest);
+        const chainStop=pulse(elapsed,LOCK_SETTLE.load,LOCK_SETTLE.arrest,LOCK_SETTLE.arrest,LOCK_SETTLE.rest);
+        pose.stoneHold=smoothstep(elapsed,LOCK_STAIR.touch,LOCK_STAIR.touch+.44);
+        pose.stoneCompression=compress;
+        pose.lockSilhouette=pulse(elapsed,7.57,8.24,8.77,9.54);
+        pose.wingLatchExpose=pulse(elapsed,8.33,8.61,8.95,9.38);
+        pose.lockHang=smoothstep(age,wing+.13,latch+.64);
+        pose.wingWeight=smoothstep(elapsed,13.92,15.08);
+        pose.freeWingSlack=smoothstep(elapsed,14.96,17.34);
+        pose.lockBreath=.62*pulse(elapsed,14.15,14.73,14.98,15.77)
+          + .28*pulse(elapsed,16.05,16.83,17.06,17.54)
+          + .12*pulse(elapsed,18.05,18.38,18.63,19.09);
+        this.bank = clamp(this.bank + .27 * pose.tetherJerk - .18 * pose.strain
+          + .15*secondReach + .13*pose.lockHang + .048*pose.lockBreath -.20*pose.lockSilhouette
+          - .27*lastPull - .19*pose.stoneReach - .16*recoilOnStone + .35*pose.stoneLean - .13*chainStop + .34*snag - .18*drop
+          - .36*pose.lockShock, -.62,.62);
+        lookDown=pulse(elapsed,14.76,skid,16.53,17.31);
+        const lastLook=.31*pulse(elapsed,17.15,17.47,17.52,18.15);
+        lockLook=Math.max(.86*gateDrive,lastLook,.78*doorReach);
+        lockRelease=smoothstep(elapsed,17.35,LOCK_SETTLE.exhale);
+        lockExhale=.62*pulse(elapsed,15.03,15.39,15.67,16.35)+.53*pulse(elapsed,18.08,18.36,18.64,19.04);
+        this.pitch = lerp(this.pitch, -.11, firstReach*.66);
+        this.pitch = lerp(this.pitch, .29, secondReach*.85);
+        this.pitch = lerp(this.pitch, .41, pose.strain * .66);
+        this.pitch = lerp(this.pitch, .18, .62*lockLook);
+        this.pitch = lerp(this.pitch,-.21,doorReach*.70);
+        this.pitch += .22*lastLook - .23*lookDown - .05*pose.lockBreath + .24*lastPull
+          - .14*pose.stoneReach + .12*recoilOnStone - .11*compress + .21*kick - .19*chainStop + .51*snag - .31*drop - .41*pose.lockShock;
+        const kneel=smoothstep(elapsed,LOCK_STAIR.lower,LOCK_STAIR.rest);
+        pose.stairKneel=kneel;
+        const lying=smoothstep(elapsed,17.24,18.22);
+        this.pitch = lerp(this.pitch, .24, kneel*.97);
+        pose.stairRest=lying;
+        this.pitch=lerp(this.pitch,-.04,lying);
+        this.bank=lerp(this.bank,.55,lying*.86);
+      } else {
+        pose.lockReach=0;
+        pose.lockHang=0;
+        pose.wingWeight=0;
+        pose.freeWingSlack=0;
+        pose.lockBreath=0;
+        pose.lockSilhouette=0;
+        pose.wingLatchExpose=0;
+        pose.stoneReach=0;
+        pose.stairElapsed=null;
+        pose.stairKneel=0;
+        pose.stairRest=0;
+        pose.stoneLean=0;
+        pose.stoneHold=0;
+        pose.stoneCompression=0;
+        pose.lockShockTime=null;
+        pose.lockShock=0;
+      }
       this.arrival = frame.intent?.arrived ? Math.min(1,this.arrival+dt/1.4) : 0;
       flightArrival(this.arrival,this.arrivalStroke);
       const climb = smoothstep(this.lift, .05, 2.3);
       const descent = smoothstep(-this.lift, .02, 1.6);
-      const power = clamp(.20 + .18 * this.drive + .60 * climb + .32 * this.change
+      const power = clamp(.44 + .23 * this.drive + .41 * climb + .25 * this.change
         + .14 * Math.abs(this.turn) - .24 * descent - .16 * this.surge, 0, 1);
-      this.wingPower = approach(this.wingPower, power, 3.6, dt);
-      this.wingPhase += dt * (.37 + .19 * this.wingPower);
+      const chapterWing = frame.chapterWing;
+      const rainStroke = blessing ? pulse(age, .50, 1.05, 1.60, 2.16) : 0;
+      pose.rainBend = blessing ? pulse(age, .46, 1.06, 2.16, 3.17) : 0;
+      pose.rainPress = blessing ? pulse(age, 1.13, 1.46, 1.65, 2.03) : 0;
+      const effort = lerp(Math.max(power * (1 - .78 * pose.tuck) * (1 - .83 * pose.bind), pose.strain, rainStroke, gateDrive),
+        .98, chapterWing?.force ?? 0);
+      this.wingPower = approach(this.wingPower, effort, 3.6, dt);
+      const liveWing = this.wingPhase + dt * (.36 + .20 * this.wingPower + .16 * pose.strain)
+        * (1 - .86 * pose.bind * (1 - pose.strain)) * (1 - pose.lockHang);
+      // Open and hold briefly, then press once. The fastest part of the
+      // stroke coincides with the first rain leaving the outer feathers.
+      const rainWing = .85 + .253 * smoothstep(age, .25, .86)
+        + .352 * smoothstep(age, BLESSING_RAIN_AT - .13, BLESSING_RAIN_AT + .28)
+        + .055 * smoothstep(age, 1.52, 1.85)
+        + .23 * smoothstep(age, 1.88, 2.53);
+      const strokeTurn = rainWing - liveWing;
+      const strokeCorrection = strokeTurn - Math.round(strokeTurn);
+      const pushStroke = .03 + .56*smoothstep(age,GATE_BIND.ankle+.42,GATE_BIND.wing-.04);
+      const pushDelta = pushStroke-liveWing;
+      const pressWing = locked ? gateDrive*pose.lockReach*smoothstep(age,GATE_BIND.ankle+.43,GATE_BIND.ankle+.70) : 0;
+      this.wingPhase = chapterWing?.phase ?? liveWing + (pushDelta - Math.round(pushDelta)) * pressWing
+        + strokeCorrection * smoothstep(age, .09, .38) * (blessing ? 1 - smoothstep(age, 2.20, 2.70) : 0);
+      if (audience) {
+        const rest = .35 + .25 * smoothstep(age, 1.36, 2.02);
+        const difference = rest - this.wingPhase;
+        this.wingPhase += (difference - Math.round(difference)) * pose.tuck;
+      }
+      this.flightPhase = this.wingPhase;
       flightStroke(this.wingPhase, this.wingStroke);
+    } else if (stage === 3) {
+      this.flightPhase += dt * (.20 + .20 * this.drive + .035 * Math.abs(this.lift));
     }
     this.poseGesture(frame, dt);
+    if (stage === 4 && this.gatePose.rainPress > 0) {
+      this.aimPitch=lerp(this.aimPitch,-.27,.78*this.gatePose.rainPress);
+    }
+    if (courtBow > 0) {
+      this.aimYaw *= 1 - courtBow;
+      this.aimPitch = lerp(this.aimPitch, -.39, courtBow);
+    }
+    if(lockLook||lockRelease||lockExhale||lookDown){
+      const gate=frame.finale.threshold;
+      const dx=gate.x-position.x,dz=gate.z-position.z;
+      const atGate=wrap(Math.atan2(dx,dz)-this.heading);
+      const elevation=clamp(Math.atan2(gate.y-position.y,Math.hypot(dx,dz)),-.21,.41);
+      this.aimYaw=lerp(this.aimYaw,clamp(atGate,-.38,.38),.92*lockLook);
+      this.aimPitch=lerp(this.aimPitch,elevation,lockLook);
+      this.aimPitch=lerp(this.aimPitch,-.39,lookDown);
+      this.aimPitch=lerp(this.aimPitch,.04,lockRelease*.88);
+      this.jaw=Math.max(this.jaw,lockExhale);
+    }
     if (stage < 2) {
       // Stroke follows travelled distance. A stopped animal settles into a
       // slow water drift rather than running through a swimming cycle.
       const travelled = fresh || relocated || changed ? 0 : planar;
       const stroke = Math.min(travelled * (2 * Math.PI / surfaceStride[stage]), dt * style.swimRate * 1.35);
       this.phase += stroke + dt * (stage === 0 ? .58 : .40) * (1 - this.drive);
+    } else if (stage === 3) {
+      const swimRate = style.swimRate * (.25 + this.drive * .75 + this.surge * .36);
+      const flightRate = (.20 + .20 * this.drive + .035 * Math.abs(this.lift)) * 2 * Math.PI;
+      this.phase += dt * lerp(swimRate, flightRate, this.air);
     } else {
       this.phase += dt * style.swimRate * (.25 + this.drive * .75 + this.surge * .36);
     }
@@ -485,6 +703,6 @@ export class DragonMotion {
       this.length = target;
       this.lengthVelocity = 0;
     }
-    this.last = { stage, time, target, x: position.x, y: position.y, z: position.z };
+    this.last = { stage, chapter, time, target, heading, x: position.x, y: position.y, z: position.z };
   }
 }

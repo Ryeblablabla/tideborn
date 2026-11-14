@@ -1,6 +1,6 @@
 import { TAU, clamp, flightBand } from './rules.js';
 
-const skyHabitat = { limit: 158, pockets: 14, along: 3.8, across: 1.65 };
+const skyHabitat = { limit: 54, pockets: 9, along: 3.8, across: 1.65 };
 
 export const ambientLimit = stage => stage === 3 ? skyHabitat.limit : 0;
 
@@ -9,7 +9,9 @@ function makePocket(game, slot) {
   const reach = 8 + Math.sqrt(roll()) * 24;
   const angle = p.angle + (slot + (roll() - .5) * 1.3) * TAU / skyHabitat.pockets;
   const z = p.z + Math.cos(angle) * reach;
-  const river = game.flightRoute?.(z);
+  const current = game.flightRoute?.(p.z);
+  const followsRiver = current && (!game.exploring || Math.abs(p.x - current.x) < current.halfWidth + 7);
+  const river = followsRiver ? game.flightRoute(z) : null;
   const x = river ? river.x + Math.sin(angle) * river.halfWidth * .83 : p.x + Math.sin(angle) * reach;
   const heading = river ? Math.atan(river.grade) + (slot % 2 ? -.34 : .34) : angle + Math.PI / 2;
   const band = clamp(p.altitude, 9.4, 15.7) + (slot % 3 - 1) * 2.65;
@@ -33,7 +35,8 @@ export function ambientPosition(game) {
     const x = pocket.x + sin * along + cos * across;
     const z = pocket.z + cos * along - sin * across;
     const y = clamp(pocket.band + (roll() - .5) * 1.10, 7, high - .55);
-    if (Math.abs(x) < 66 && Math.abs(z) < 66 && (!game.terrainHeight || game.terrainHeight(x, z) + .65 < y)) {
+    if ((game.exploring || Math.abs(x) < 66 && Math.abs(z) < 66) &&
+        (!game.terrainHeight || game.terrainHeight(x, z) + .65 < y)) {
       return { x, z, y, foodHeading: pocket.heading };
     }
     if (attempt >= 7) pockets[slot] = null;

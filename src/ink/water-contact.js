@@ -3,7 +3,6 @@ import { seaWind } from './sea-weather.js';
 
 const CONTACT_CAPACITY = 3;
 const CONTACT_LIFE = 1.85;
-const WAKE_LIFE = 2.15;
 const HULL_SEGMENTS = 10;
 const TURN_LIMIT = 3;
 const TURN_LIFE = 1.20;
@@ -343,7 +342,6 @@ function impulseAt(x, z, event) {
 export class SeaContact {
   constructor() {
     this.events=[];
-    this.wake=[];
     this.counts={entry:0,launch:0};
     this.body=null;
     this.hull=Array.from({length:HULL_SEGMENTS+1},()=>({x:0,z:0,load:0,width:1,speed:0}));
@@ -370,7 +368,6 @@ export class SeaContact {
 
   reset() {
     this.events.length=0;
-    this.wake.length=0;
     this.body=null;
     this.hullLength=0;
     this.turns.length=0;
@@ -439,15 +436,6 @@ export class SeaContact {
         this.emit('entry',time,point,frame.heading,speed,surface,gap,head.y);
         this.airborne=false;
       }
-      if(speed>.42 && clearance<1.73) {
-        const last=this.wake[0];
-        if(!last || time-last.time>.075 && Math.hypot(head.x-last.x,head.z-last.z)>.55) {
-          this.wake.unshift({x:head.x,z:head.z,time,
-            strip:this.serial,
-            strength:clamp((speed-.3)*.18,0,1)*(1-smooth(clearance,.91,1.73))});
-          if(this.wake.length>18) this.wake.pop();
-        }
-      }
       Object.assign(previous,{x:head.x,y:head.y,z:head.z,time,gap});
     }
     for(const event of this.events) event.age=time-event.time;
@@ -457,7 +445,6 @@ export class SeaContact {
     }
     while(this.turns.length&&this.turns[0].age>=TURN_LIFE)this.turns.shift();
     while(this.events.length && this.events[0].age>CONTACT_LIFE) this.events.shift();
-    while(this.wake.length && time-this.wake.at(-1).time>WAKE_LIFE) this.wake.pop();
     if(dt>0&&game.status!=='playing')this.velocity.set(0,0,0);
     this.updateHull(frame,dt,time,sampleSurface,paintedSpine);
     this.upload();
@@ -562,16 +549,6 @@ export class SeaContact {
     uHullTravel.value.set(bow.fx,bow.fz,bow.lead,0);
   }
 
-  writeWake(points, strengths, links, time) {
-    for(let i=0;i<points.length;i++) {
-      const sample=this.wake[i];
-      links[i]=Number(!!sample && sample.strip===this.wake[i+1]?.strip);
-      if(!sample) {points[i].set(0,1000,0);strengths[i]=0;continue;}
-      points[i].set(sample.x,.72,sample.z);
-      strengths[i]=sample.strength*(1-smooth(time-sample.time,.18,WAKE_LIFE));
-    }
-  }
-
   liftAt(x,z) {
     let lift=0;
     for(let i=0;i<this.events.length;i++) lift+=impulseAt(x,z,this.events[i]);
@@ -669,7 +646,7 @@ export class SeaContact {
   }
 
   inspect() {
-    return {counts:{...this.counts},airborne:this.airborne,wake:this.wake.length,hull:this.hullLength,
+    return {counts:{...this.counts},airborne:this.airborne,hull:this.hullLength,
       hullLoad:Math.max(0,...this.hull.slice(0,this.hullLength+1).map(node=>node.load)),
       bow:this.bow.load,gap:this.previous?.gap,turn:this.turns.map(({age,side,load,x,z})=>({age,side,load,x,z})),
       triangles:this.splash.indexCount/3,velocity:this.velocity.toArray(),

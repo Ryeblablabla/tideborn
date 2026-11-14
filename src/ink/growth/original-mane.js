@@ -4,6 +4,7 @@ const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 const random=i=>{const n=Math.sin(i*127.1+311.7)*43758.5453;return n-Math.floor(n);};
 const TAU=Math.PI*2;
 const smooth=(a,b,x)=>{const t=clamp((x-a)/(b-a),0,1);return t*t*(3-2*t);};
+export const maneRidgeColumns = 5;
 function spring(record,targetX,targetY,dt,omega=12,damping=.80){
  const steps=Math.max(1,Math.ceil(dt*120)),h=dt/steps;
  for(let i=0;i<steps;i++){
@@ -37,7 +38,7 @@ export function* manePatches(length, stage, bandIndex) {
     + Math.sin(start * 13.4 - phase) * .15;
   const lean = Math.sin(start * 3.4 + phase) * .31 + (random(seed + 1) - .5) * .26;
   const side = lean > 0 ? 1 : -1;
-  const raised = stage === 4 && start - lastRaised > .17 + .10 * random(seed + 22)
+  const raised = stage === 4 && start - lastRaised > .28 + .16 * random(seed + 22)
     && fullness > .27 && random(seed + 24) > .27;
   if(raised)lastRaised=start;
   const heavy = raised || fullness > .42 && random(seed + 2) > .20;
@@ -49,8 +50,8 @@ export function* manePatches(length, stage, bandIndex) {
    angle: lean,
    length: lengthGain * (raised ? 1.43 + random(seed + 4) * .47 : heavy ? 1.02 + random(seed + 4) * .55 : 1.17 + random(seed + 4) * .42),
    breadth: thickness * (raised ? .78 + random(seed + 5) * .37 : heavy ? .85 + random(seed + 5) * .48 : .68 + random(seed + 5) * .30),
-   height: raised ? 1.35 + random(seed + 6) * .56 : heavy ? .92 + random(seed + 6) * .43 : .72 + random(seed + 6) * .31,
-   pitch: raised ? .57 + random(seed + 7) * .27 : heavy ? .23 + random(seed + 7) * .24 : .09 + random(seed + 7) * .18,
+   height: (stage === 4 ? .76 : 1) * (raised ? 1.06 + random(seed + 6) * .40 : heavy ? .92 + random(seed + 6) * .43 : .72 + random(seed + 6) * .31),
+   pitch: raised ? .28 + random(seed + 7) * .17 : heavy ? .23 + random(seed + 7) * .24 : .09 + random(seed + 7) * .18,
    yaw: (random(seed + 8) - .5) * (heavy ? .39 : .54),
   };
   yield patch;
@@ -198,7 +199,7 @@ export class OriginalMane {
     const softness=info.raised?1.16:info.role==='crest'?1:info.role==='sweep'?.91:info.role==='side'?.77:.62;
     const flow=this.flow.sample(info.arc,info.seed,softness,record.flow);
     if(this.dynamic){
-     const lift=info.raised?.23+.06*this.flow.lift:0;
+     const lift=info.raised?.045+.04*this.flow.lift:0;
      spring(record,clamp(flow.x+lift+torque.x*.13*softness-inertia.y*.012,-.42,.43),
       clamp(flow.y+torque.y*.15*softness+inertia.x*.012,-.37,.37),dt,(info.raised?8:info.role==='crest'?9:12)+random(info.seed)*3,.76);
      flow.x=record.x;flow.y=record.y;
@@ -214,4 +215,53 @@ export class OriginalMane {
   for(const key of this.records.keys())if(!active.has(key))this.records.delete(key);
  }
  setMaterial(mode){for(const batch of this.batches)if(batch.mesh)batch.mesh.material=mode==='gray'?batch.gray:batch.ink;}
+}
+
+/** The long locks share a low crest that bends with the same profile as the back. */
+export function updateManeRidge(section, rowCount, geometry, flow, dynamic, world, normalMatrix) {
+ const { position, normal, inkRestPosition, inkRestNormal } = geometry.attributes;
+ const owner = section.owner;
+ const length = section.b - section.a + section.extra;
+ const prefix = section.zone ? owner.hipExtra : 0;
+ const point = new THREE.Vector3(), rest = new THREE.Vector3(), direction = new THREE.Vector3();
+ const up = new THREE.Vector3(), tangent = new THREE.Vector3();
+ for (let row = 0; row <= rowCount; row++) {
+  const station = length * row / rowCount;
+  const full = smooth(.001, .065, Math.min(station, length - station));
+  const arc = section.a + station + prefix;
+  // Low crests overlap in broad sweeps. The phase is in body units so
+  // growing the dragon reveals new crests at the same size.
+  const phase = station * 5.4 + .17 * Math.sin(station * 9.2 + section.zone) + section.zone * .34;
+  const wave = phase - Math.floor(phase);
+  const swell = smooth(.02, .79, wave) * (1 - smooth(.80, .99, wave));
+  const irregular = .75 + .25 * Math.sin(station * 17.4 + section.zone * 2.1);
+  const sweep = Math.sin(station * 15 + section.zone * 2.6);
+  const move = dynamic ? Math.sin(flow.phase - arc * 11.6) : 0;
+  const twist = .11 * sweep + .08 * move;
+  for (let column = 0; column < maneRidgeColumns; column++) {
+   const cross = column / (maneRidgeColumns - 1) * 2 - 1;
+   const top = (1 - cross * cross) ** 1.65;
+   const angle = Math.PI / 2 + cross * .45 + twist * top;
+   const surface = section.surface(section.a + station, angle);
+   const distance = owner.headZ - surface.z + prefix;
+   const height = full * top * (.006 + .023 * swell * irregular + .0018 * move);
+   const rise = height - .006 * (1 - full * top);
+   const frame = owner.sampleFrame(distance);
+   up.copy(frame.b).multiplyScalar(Math.sin(angle)).addScaledVector(frame.n, Math.cos(angle));
+   point.copy(frame.p).addScaledVector(frame.n, surface.x).addScaledVector(frame.b, surface.y)
+    .addScaledVector(up, rise).addScaledVector(frame.t, height * (1.15 + .25 * flow.stream));
+   direction.copy(up).addScaledVector(frame.n, -.86 * cross).normalize();
+   const i = row * maneRidgeColumns + column;
+   point.applyMatrix4(world);
+   direction.applyMatrix3(normalMatrix).normalize();
+   position.setXYZ(i, point.x, point.y, point.z);
+   normal.setXYZ(i, direction.x, direction.y, direction.z);
+   // Pigment stays in model coordinates even while the back bends in flight.
+   rest.set(surface.x, surface.y + rise, owner.headZ - arc - height * 1.15);
+   inkRestPosition.setXYZ(i, rest.x, rest.y, rest.z);
+   tangent.set(-.86 * cross + Math.cos(angle), Math.sin(angle), 0).normalize();
+   inkRestNormal.setXYZ(i, tangent.x, tangent.y, tangent.z);
+  }
+ }
+ inkRestPosition.needsUpdate = inkRestNormal.needsUpdate = true;
 }

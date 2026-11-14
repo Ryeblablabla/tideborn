@@ -142,6 +142,11 @@ export class ManeWashEmitter {
   let wash=washByRenderer.get(ink);
   if(!wash){wash=new ManeWash(ink);washByRenderer.set(ink,wash);}
   wash.providers.push(this);
+  this.wash=wash;
+ }
+ prepare(compile) {
+  const {scene,target}=this.wash;
+  return compile(scene,target);
  }
  get count(){return this.plumes.length;}
  get washOpacity(){

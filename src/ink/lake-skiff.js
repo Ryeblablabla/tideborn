@@ -74,8 +74,7 @@ function paint(environment,root,parts,name,tint,tone,amount=.4) {
   mesh.name=name;
 }
 
-export function addLakeSkiff(environment,root) {
-  const x=11.8,z=-7.6,yaw=-.33;
+export function addLakeSkiff(environment,root,{x=11.8,z=-7.6,yaw=-.33,contact=true}={}) {
   const boat=new THREE.Group();
   boat.name='松岬乌篷舟';
   boat.position.set(x,SHORE_WATER,z);
@@ -97,6 +96,7 @@ export function addLakeSkiff(environment,root) {
   ribs.push(edge([[1.12,.202,-.47],[1.60,.184,-.21],[2.12,.222,.18]],.024,.17,.11));
   paint(environment,boat,ribs,'篷骨与两舷木线','#82715a',[.18,.31],.57);
 
+  if(!contact)return;
   for(const side of [-1,1]){
     const v=side*.79;
     shoreStructureMark(root,environment,x+v*Math.sin(yaw),z+v*Math.cos(yaw),-yaw,

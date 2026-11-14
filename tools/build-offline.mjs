@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-const result=await build({absWorkingDir:root,entryPoints:['src/main.js'],bundle:true,format:'iife',target:'es2022',minify:true,write:false,outfile:'game.js',legalComments:'inline',loader:{'.glb':'dataurl','.png':'dataurl','.woff':'dataurl'}});
+const result=await build({absWorkingDir:root,entryPoints:['src/main.js'],bundle:true,format:'iife',target:'es2022',minify:true,write:false,outfile:'game.js',legalComments:'inline',define:{'import.meta.env.VITE_PUBLIC_GAME':'"0"'},loader:{'.png':'dataurl','.woff':'dataurl','.mp3':'dataurl'}});
 const js=result.outputFiles.find(f=>f.path.endsWith('.js')).text.replace(/<\/script/gi,'<\\/script');
 const css=result.outputFiles.find(f=>f.path.endsWith('.css')).text;
 const source=fs.readFileSync(path.join(root,'index.html'),'utf8');
